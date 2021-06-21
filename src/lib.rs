@@ -1,5 +1,3 @@
-#![feature(option_result_unwrap_unchecked)]
-
 use crate::event::EventRegistry;
 use crate::handler::{
     BlockingEventHandlerBlueprint, EventGroupBuilder, EventHandlerBlueprint, EventHandlerBuilder,

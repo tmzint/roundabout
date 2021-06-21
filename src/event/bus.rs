@@ -389,7 +389,8 @@ impl EventBusSender {
     #[inline]
     pub fn flush_padding(&mut self) {
         unsafe {
-            let mut padding_events_cache = self.padding_events_cache.take().unwrap_unchecked();
+            // Optimization: use unwrap_unchecked (micro)
+            let mut padding_events_cache = self.padding_events_cache.take().unwrap();
             self.send_all_unchecked(&mut padding_events_cache);
             padding_events_cache.set_len(self.cache_line_padding);
             self.padding_events_cache = Some(padding_events_cache);
