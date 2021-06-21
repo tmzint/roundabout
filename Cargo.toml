@@ -11,7 +11,24 @@ license = "MIT OR Apache-2.0"
 keywords = ["concurrency", "event", "bus", "queue"]
 categories = ["asynchronous", "concurrency"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+#[profile.dev]
+#opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = true
+incremental = false
+#panic = 'abort'
+codegen-units = 1
+debug = true
+# use Xargo
+
+
+[profile.bench]
+opt-level = 3
+lto = true
+codegen-units = 1
+#incremental = false
 
 [dependencies]
 ahash = "^0.7"
