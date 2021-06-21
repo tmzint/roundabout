@@ -1,0 +1,34 @@
+[package]
+name = "roundabout"
+version = "0.1.0"
+authors = ["Timo Merlin Zint"]
+edition = "2018"
+description = "An event oriented concurrent runtime"
+readme = "README.md"
+homepage = "https://github.com/tmzint/roundabout/"
+repository = "https://github.com/tmzint/roundabout/"
+license = "MIT OR Apache-2.0"
+keywords = ["concurrency", "event", "bus", "queue"]
+categories = ["asynchronous", "concurrency"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ahash = "^0.7"
+indexmap = "^1.5"
+log = "^0.4"
+core_affinity = "^0.5"
+static_assertions = "^1.1"
+parking_lot = "^0.11"
+
+[dev-dependencies]
+criterion = "^0.3"
+ctrlc = { version = "^3.1", features = ["termination"] }
+
+[[bench]]
+name = "event_bus_bench"
+harness = false
+
+[[bench]]
+name = "runtime_bench"
+harness = false
