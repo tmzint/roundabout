@@ -279,6 +279,15 @@ impl EventSender {
     }
 
     #[inline]
+    pub fn buffer(&self) -> EventVec {
+        let registry = self.head
+            .write()
+            .get_registry().clone();
+
+        EventVec::new(registry)
+    }
+
+    #[inline]
     pub fn prepare<E: 'static + Send + Sync>(&mut self, event: E) -> Option<UntypedEvent> {
         unsafe {
             // Optimization: static resolution of e_idx
