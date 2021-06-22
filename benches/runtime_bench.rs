@@ -21,7 +21,7 @@ pub fn ping_sequential(b: &mut Bencher<WallTime>, n: usize, t: usize) {
             runtime_builder = runtime_builder.register::<PingState, _>(|b| {
                 b.on::<PingEvent>(|state, context, ping| {
                     if state.counter == state.n {
-                        context.shutdown();
+                        context.shutdown_switch().request_shutdown();
                     }
 
                     if ping.0 % state.t == state.i {
@@ -64,7 +64,7 @@ pub fn ping_concurrent(b: &mut Bencher<WallTime>, n: usize, t: usize, in_flight:
                 })
                 .on::<PingEvent>(|state, context, ping| {
                     if state.counter == state.n {
-                        context.shutdown();
+                        context.shutdown_switch().request_shutdown();
                     }
 
                     if ping.0 % state.t == state.i {

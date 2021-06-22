@@ -28,8 +28,8 @@ impl RuntimeContext {
     }
 
     #[inline]
-    pub fn shutdown(&mut self) {
-        self.shutdown_switch.shutdown();
+    pub fn shutdown_switch(&mut self) -> &mut ShutdownSwitch {
+        &mut self.shutdown_switch
     }
 }
 

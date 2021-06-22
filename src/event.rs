@@ -37,10 +37,15 @@ impl PaddingEvent {
 }
 static_assertions::assert_eq_size!(PaddingEvent, ());
 
-pub struct ShutdownEvent;
+pub struct ShutdownEvent(PhantomData<()>);
 
 impl ShutdownEvent {
     pub(crate) const EVENT_INDEX: usize = 1;
+
+    pub(crate) fn new() -> Self {
+        // non public constructable shutdown event
+        Self(Default::default())
+    }
 }
 
 static_assertions::assert_eq_size!(ShutdownEvent, ());

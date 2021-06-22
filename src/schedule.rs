@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 const SHUTDOWN_NONE: usize = 0;
 const SHUTDOWN_ORDERLY: usize = 1;
-const SHUTDOWN_ABORT: usize = 2;
+const SHUTDOWN_FINISH: usize = 2;
+const SHUTDOWN_ABORT: usize = 3;
 
 pub struct ShutdownSwitch {
     shutdown: Arc<AtomicUsize>,
@@ -30,13 +31,27 @@ impl ShutdownSwitch {
     }
 
     #[inline]
-    pub fn shutdown(&mut self) {
-        let _ = self.shutdown.compare_exchange(
-            SHUTDOWN_NONE,
-            SHUTDOWN_ORDERLY,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        );
+    pub fn request_shutdown(&mut self) -> bool {
+        self.shutdown
+            .compare_exchange(
+                SHUTDOWN_NONE,
+                SHUTDOWN_ORDERLY,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
+    }
+
+    #[inline]
+    pub fn finish_shutdown(&mut self) -> bool {
+        self.shutdown
+            .compare_exchange(
+                SHUTDOWN_ORDERLY,
+                SHUTDOWN_FINISH,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
     }
 }
 
@@ -168,12 +183,6 @@ impl EventScheduler {
     }
 }
 
-pub enum ShutdownState {
-    Timeout(Instant),
-    Now,
-    None,
-}
-
 unsafe fn run_router<E: 'static + Send + Sync>(
     init: E,
     tails: Vec<TripleBufferedTail<EventVec>>,
@@ -189,7 +198,7 @@ unsafe fn run_router<E: 'static + Send + Sync>(
     let mut waiter = waiting_strategy.waiter();
     let mut buffer = bus_sender.buffer();
     buffer.push(init);
-    let mut shutdown_state = ShutdownState::None;
+    let mut shutdown_timeout_at: Option<Instant> = None;
 
     loop {
         for tail in &tails {
@@ -199,47 +208,39 @@ unsafe fn run_router<E: 'static + Send + Sync>(
 
         match shutdown.load(Ordering::Relaxed) {
             SHUTDOWN_NONE => {}
-            SHUTDOWN_ORDERLY => match shutdown_state {
-                ShutdownState::Now => {
-                    buffer.push(ShutdownEvent);
-                    bus_sender.send_all(&mut buffer);
-                    bus_sender.flush_padding();
-                    return;
-                }
-                ShutdownState::Timeout(at) => {
-                    let shutdown = buffer
-                        .iter()
-                        .any(|e| e.event_idx() == ShutdownEvent::EVENT_INDEX);
-                    let timeout = at <= Instant::now();
-
-                    if shutdown || timeout {
-                        if shutdown {
-                            log::info!("finishing shutdown");
-                        } else if timeout {
-                            log::info!(
-                                "timeout of shutdown after {:.2}s",
-                                shutdown_timeout.as_secs_f64()
-                            );
-                            buffer.push(ShutdownEvent);
-                        }
-
-                        bus_sender.send_all(&mut buffer);
-                        bus_sender.flush_padding();
-                        return;
-                    }
-                }
-                ShutdownState::None => {
+            SHUTDOWN_ORDERLY => match shutdown_timeout_at {
+                None => {
                     if !buffer.push(ShutdownRequestedEvent::new()) {
                         log::info!(
                             "instant shutdown as no event handler for the request was registered"
                         );
-                        shutdown_state = ShutdownState::Now;
+                        let _ = shutdown.compare_exchange(
+                            SHUTDOWN_ORDERLY,
+                            SHUTDOWN_FINISH,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        );
                     } else {
                         log::info!("shutdown was requested");
-                        shutdown_state = ShutdownState::Timeout(Instant::now() + shutdown_timeout);
+                        shutdown_timeout_at = Some(Instant::now() + shutdown_timeout);
+                    }
+                }
+                Some(at) => {
+                    if at <= Instant::now() {
+                        log::info!(
+                            "timeout of shutdown after {:.2}s",
+                            shutdown_timeout.as_secs_f64()
+                        );
                     }
                 }
             },
+            SHUTDOWN_FINISH => {
+                log::info!("finishing shutdown");
+                buffer.push(ShutdownEvent::new());
+                bus_sender.send_all(&mut buffer);
+                bus_sender.flush_padding();
+                return;
+            }
             SHUTDOWN_ABORT => {
                 log::error!("scheduler run into an unrecoverable error");
                 std::process::abort();

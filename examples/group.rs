@@ -83,7 +83,7 @@ fn main() {
 
     let mut shutdown_switch = runtime.get_shutdown_switch();
     ctrlc::set_handler(move || {
-        shutdown_switch.shutdown();
+        shutdown_switch.request_shutdown();
     })
     .expect("Error setting Ctrl-C handler");
 
