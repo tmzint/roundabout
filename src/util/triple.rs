@@ -89,3 +89,11 @@ impl<T> TripleBufferedHead<T> {
         }
     }
 }
+
+impl<T> Clone for TripleBufferedHead<T> {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+        }
+    }
+}

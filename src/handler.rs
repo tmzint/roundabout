@@ -23,8 +23,8 @@ impl RuntimeContext {
     }
 
     #[inline]
-    pub fn sender(&mut self) -> &mut EventSender {
-        &mut self.sender
+    pub fn sender(&self) -> &EventSender {
+        &self.sender
     }
 
     #[inline]
@@ -33,9 +33,9 @@ impl RuntimeContext {
     }
 }
 
-impl AsMut<EventSender> for RuntimeContext {
+impl AsRef<EventSender> for RuntimeContext {
     #[inline]
-    fn as_mut(&mut self) -> &mut EventSender {
+    fn as_ref(&self) -> &EventSender {
         self.sender()
     }
 }

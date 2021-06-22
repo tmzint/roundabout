@@ -454,19 +454,3 @@ impl<T> EventPipeline<T> {
         (state, &mut self.pipeline.context)
     }
 }
-
-impl<T> Deref for EventPipeline<T> {
-    type Target = T;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.state()
-    }
-}
-
-impl<T> DerefMut for EventPipeline<T> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.state_mut()
-    }
-}

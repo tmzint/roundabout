@@ -240,10 +240,11 @@ unsafe impl Sync for UntypedEvent {}
 
 pub struct EventSender {
     head: TripleBufferedHead<EventVec>,
-    // Don't auto impl send and sync for EventSender for future compatibility,
-    // as with an ring buffer the implementation might use thread local storage.
+    // Don't auto impl send and sync as TripleBufferedHead should be thread specific
     _pd: PhantomData<*mut u8>,
 }
+
+static_assertions::assert_not_impl_any!(EventSender: Send, Sync);
 
 impl EventSender {
     pub fn new(head: TripleBufferedHead<EventVec>) -> Self {
@@ -254,7 +255,7 @@ impl EventSender {
     }
 
     #[inline]
-    pub fn send<E: 'static + Send + Sync>(&mut self, event: E) {
+    pub fn send<E: 'static + Send + Sync>(&self, event: E) {
         if !self.head.write().push(event) {
             log::warn!(
                 "skipping sending of unhandled event type: {}",
@@ -264,7 +265,7 @@ impl EventSender {
     }
 
     #[inline]
-    pub fn send_iter<I: IntoIterator<Item = E>, E: 'static + Send + Sync>(&mut self, events: I) {
+    pub fn send_iter<I: IntoIterator<Item = E>, E: 'static + Send + Sync>(&self, events: I) {
         if !self.head.write().extend(events) {
             log::warn!(
                 "skipping sending of unhandled event type: {}",
@@ -274,21 +275,19 @@ impl EventSender {
     }
 
     #[inline]
-    pub fn send_all(&mut self, events: &mut EventVec) {
+    pub fn send_all(&self, events: &mut EventVec) {
         self.head.write().extend_vec(events);
     }
 
     #[inline]
     pub fn buffer(&self) -> EventVec {
-        let registry = self.head
-            .write()
-            .get_registry().clone();
+        let registry = self.head.write().get_registry().clone();
 
         EventVec::new(registry)
     }
 
     #[inline]
-    pub fn prepare<E: 'static + Send + Sync>(&mut self, event: E) -> Option<UntypedEvent> {
+    pub fn prepare<E: 'static + Send + Sync>(&self, event: E) -> Option<UntypedEvent> {
         unsafe {
             // Optimization: static resolution of e_idx
             self.head
@@ -300,7 +299,7 @@ impl EventSender {
     }
 
     #[inline]
-    pub fn send_untyped(&mut self, mut event: UntypedEvent) {
+    pub fn send_untyped(&self, mut event: UntypedEvent) {
         unsafe {
             let mut head = self.head.write();
             match head.get_registry().get_index(event.tid) {
@@ -311,6 +310,15 @@ impl EventSender {
                     panic!("untyped event is incompatible with event registry");
                 }
             }
+        }
+    }
+}
+
+impl Clone for EventSender {
+    fn clone(&self) -> Self {
+        Self {
+            head: self.head.clone(),
+            _pd: Default::default(),
         }
     }
 }
