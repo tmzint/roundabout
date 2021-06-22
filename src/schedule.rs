@@ -6,7 +6,7 @@ use crate::util::cpu::CpuAffinity;
 use crate::util::triple::{TripleBuffered, TripleBufferedHead, TripleBufferedTail};
 use crate::wait::WaitingStrategy;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -406,8 +406,13 @@ impl<T> EventPipeline<T> {
 
     #[inline]
     pub fn trim_horizon_while<F: Fn(&T) -> bool>(&mut self, condition: F) {
+        self.trim_horizon_until(|t| !condition(t));
+    }
+
+    #[inline]
+    pub fn trim_horizon_until<F: Fn(&T) -> bool>(&mut self, condition: F) {
         unsafe {
-            if !condition(&*(self.pipeline.handler.state() as *const T)) {
+            if condition(&*(self.pipeline.handler.state() as *const T)) {
                 return;
             }
 
@@ -421,7 +426,7 @@ impl<T> EventPipeline<T> {
 
                 // Optimization: only check condition when handler actually handles event
                 let state = &*(self.pipeline.handler.state() as *const T);
-                if !condition(state) {
+                if condition(state) || event.event_idx() == ShutdownEvent::EVENT_INDEX {
                     return;
                 }
             }
