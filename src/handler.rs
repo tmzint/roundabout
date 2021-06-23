@@ -5,6 +5,7 @@ use crate::util::HashMap;
 use core::mem;
 use std::alloc::Layout;
 use std::any::TypeId;
+use std::borrow::{Borrow, BorrowMut};
 use std::marker::PhantomData;
 
 // TODO: use TypeStates to minimize temporary structures
@@ -33,16 +34,23 @@ impl RuntimeContext {
     }
 }
 
-impl AsRef<EventSender> for RuntimeContext {
+impl Borrow<EventSender> for RuntimeContext {
     #[inline]
-    fn as_ref(&self) -> &EventSender {
+    fn borrow(&self) -> &EventSender {
         self.sender()
     }
 }
 
-impl AsMut<ShutdownSwitch> for RuntimeContext {
+impl Borrow<ShutdownSwitch> for RuntimeContext {
     #[inline]
-    fn as_mut(&mut self) -> &mut ShutdownSwitch {
+    fn borrow(&self) -> &ShutdownSwitch {
+        &self.shutdown_switch
+    }
+}
+
+impl BorrowMut<ShutdownSwitch> for RuntimeContext {
+    #[inline]
+    fn borrow_mut(&mut self) -> &mut ShutdownSwitch {
         &mut self.shutdown_switch
     }
 }
