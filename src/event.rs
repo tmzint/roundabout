@@ -260,23 +260,32 @@ impl EventSender {
     }
 
     #[inline]
-    pub fn send<E: 'static + Send + Sync>(&self, event: E) {
-        if !self.head.write().push(event) {
+    pub fn send<E: 'static + Send + Sync>(&self, event: E) -> bool {
+        let send = self.head.write().push(event);
+        if !send {
             log::warn!(
                 "skipping sending of unhandled event type: {}",
                 std::any::type_name::<E>()
             );
         }
+
+        send
     }
 
     #[inline]
-    pub fn send_iter<I: IntoIterator<Item = E>, E: 'static + Send + Sync>(&self, events: I) {
-        if !self.head.write().extend(events) {
+    pub fn send_iter<I: IntoIterator<Item = E>, E: 'static + Send + Sync>(
+        &self,
+        events: I,
+    ) -> bool {
+        let send = self.head.write().extend(events);
+        if !send {
             log::warn!(
                 "skipping sending of unhandled event type: {}",
                 std::any::type_name::<E>()
             );
         }
+
+        send
     }
 
     #[inline]
