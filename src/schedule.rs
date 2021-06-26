@@ -323,7 +323,7 @@ impl<'a> PipelinePanicBomb<'a> {
 
 impl<'a> Drop for PipelinePanicBomb<'a> {
     fn drop(&mut self) {
-        self.0.store(SHUTDOWN_ABORT, Ordering::Relaxed);
+        self.0.store(SHUTDOWN_ABORT, Ordering::Release);
     }
 }
 
