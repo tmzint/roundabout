@@ -274,7 +274,7 @@ fn run_pipeline(
     let context = RuntimeContext::new(event_sender, shutdown_switch);
 
     let blocking = group.take_blocking();
-    let mut handlers = group.initialize();
+    let mut handlers = group.initialize(&context);
 
     match (handlers.len(), blocking) {
         (1, None) => EventPipelineSingle {

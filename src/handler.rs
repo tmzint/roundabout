@@ -113,8 +113,11 @@ impl EventHandlerGroup {
         self.blocking.take()
     }
 
-    pub(crate) fn initialize(self) -> Vec<InitializedEventHandler> {
-        self.handlers.into_iter().map(|h| h.initialize()).collect()
+    pub(crate) fn initialize(self, context: &RuntimeContext) -> Vec<InitializedEventHandler> {
+        self.handlers
+            .into_iter()
+            .map(|h| h.initialize(context))
+            .collect()
     }
 }
 
@@ -150,7 +153,7 @@ impl<T: 'static> EventHandlerBuilder<T> {
         self
     }
 
-    pub fn with_factory<F: FnOnce() -> T + 'static + Send>(
+    pub fn with_factory<F: FnOnce(&RuntimeContext) -> T + 'static + Send>(
         self,
         state_init: F,
     ) -> EventHandlerBlueprint<T> {
@@ -165,7 +168,7 @@ impl<T: 'static + Send> EventHandlerBuilder<T> {
     pub fn with(self, state: T) -> EventHandlerBlueprint<T> {
         EventHandlerBlueprint {
             builder: self,
-            state_init: Box::new(|| state),
+            state_init: Box::new(|_| state),
         }
     }
 }
@@ -174,7 +177,7 @@ impl<T: 'static + Default> EventHandlerBuilder<T> {
     pub fn with_default(self) -> EventHandlerBlueprint<T> {
         EventHandlerBlueprint {
             builder: self,
-            state_init: Box::new(|| T::default()),
+            state_init: Box::new(|_| T::default()),
         }
     }
 }
@@ -183,7 +186,7 @@ unsafe impl<T: 'static> Send for EventHandlerBuilder<T> {}
 
 pub struct EventHandlerBlueprint<T> {
     builder: EventHandlerBuilder<T>,
-    state_init: Box<dyn FnOnce() -> T + 'static + Send>,
+    state_init: Box<dyn FnOnce(&RuntimeContext) -> T + 'static + Send>,
 }
 
 impl<T: 'static> EventHandlerBlueprint<T> {
@@ -222,14 +225,14 @@ pub struct BlockingEventHandlerBlueprint<T> {
 }
 
 pub struct EventHandler {
-    state_init: Box<dyn FnOnce() -> *mut u8>,
+    state_init: Box<dyn for<'a> FnOnce(&'a RuntimeContext) -> *mut u8>,
     jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8)>>,
     destructor: fn(*mut u8),
 }
 
 impl EventHandler {
     unsafe fn new<T: 'static>(
-        state_init: Box<dyn FnOnce() -> T + 'static + Send>,
+        state_init: Box<dyn for<'a> FnOnce(&'a RuntimeContext) -> T + 'static + Send>,
         jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8)>>,
     ) -> Self {
         let destructor = |state_ptr: *mut u8| {
@@ -237,19 +240,20 @@ impl EventHandler {
             std::alloc::dealloc(state_ptr, Layout::new::<mem::MaybeUninit<T>>());
         };
 
-        let raw_state_init = || {
-            let initial = (state_init)();
-            let layout = Layout::new::<mem::MaybeUninit<T>>();
-            if usize::BITS < 64 && layout.size() > isize::MAX as usize {
-                panic!("state capacity overflow");
-            }
-            let ptr = std::alloc::alloc(layout) as *mut T;
-            ptr.write(initial);
-            ptr as *mut u8
-        };
+        let state_init: Box<dyn for<'a> FnOnce(&'a RuntimeContext) -> *mut u8> =
+            Box::new(|context| {
+                let initial = (state_init)(context);
+                let layout = Layout::new::<mem::MaybeUninit<T>>();
+                if usize::BITS < 64 && layout.size() > isize::MAX as usize {
+                    panic!("state capacity overflow");
+                }
+                let ptr = std::alloc::alloc(layout) as *mut T;
+                ptr.write(initial);
+                ptr as *mut u8
+            });
 
         Self {
-            state_init: Box::new(raw_state_init),
+            state_init,
             jmp_tbl,
             destructor,
         }
@@ -261,9 +265,9 @@ impl EventHandler {
         }
     }
 
-    pub(crate) fn initialize(self) -> InitializedEventHandler {
+    pub(crate) fn initialize(self, context: &RuntimeContext) -> InitializedEventHandler {
         InitializedEventHandler {
-            state: (self.state_init)(),
+            state: (self.state_init)(context),
             jmp_tbl: self.jmp_tbl,
             destructor: self.destructor,
         }
@@ -332,7 +336,7 @@ mod tests {
     fn on_event_handler() {
         let blueprint = EventHandlerBuilder::new()
             .on::<usize>(|u, _s, event| *u = *u + *event)
-            .with_factory(|| 1usize);
+            .with_factory(|_| 1usize);
 
         let mut registry = EventRegistry::default();
         registry.register_all(
@@ -354,7 +358,7 @@ mod tests {
 
         unsafe {
             let event_payload = (&e as *const usize) as *const u8;
-            let mut initialized_event_handler = event_handler.initialize();
+            let mut initialized_event_handler = event_handler.initialize(&context);
             initialized_event_handler.handle(&mut context, idx, event_payload);
             assert_eq!(
                 *(&*(initialized_event_handler.state as *const usize)),
@@ -389,7 +393,14 @@ mod tests {
         let builder: EventHandlerBuilder<Arc<()>> = EventHandlerBuilder::new();
         let registry = EventRegistry::default();
         let arc: Arc<()> = Arc::new(());
-        let initialized_event_handler = builder.with(arc.clone()).finish(&registry).initialize();
+        let context = RuntimeContext::new(
+            EventSender::new(TripleBuffered::new_fn(|| EventVec::new(registry.clone())).0),
+            ShutdownSwitch::noop(),
+        );
+        let initialized_event_handler = builder
+            .with(arc.clone())
+            .finish(&registry)
+            .initialize(&context);
         assert_eq!(Arc::strong_count(&arc), 2);
         std::mem::drop(initialized_event_handler);
         assert_eq!(Arc::strong_count(&arc), 1);
