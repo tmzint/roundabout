@@ -7,6 +7,7 @@ use crate::util::triple::TripleBufferedHead;
 use crate::util::IndexSet;
 use std::alloc::Layout;
 use std::any::TypeId;
+use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -325,6 +326,12 @@ impl EventSender {
                 }
             }
         }
+    }
+}
+
+impl std::fmt::Debug for EventSender {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EventSender")
     }
 }
 
