@@ -353,7 +353,7 @@ impl EventBusSender {
                     self.send_nonoverlapping(e_idx, data, std::mem::size_of::<T>(), drop_fn);
                 }
                 None => {
-                    log::warn!(
+                    log::debug!(
                         "skipping sending of unhandled event type: {}",
                         std::any::type_name::<T>()
                     );

@@ -68,7 +68,7 @@ impl EventVec {
                     true
                 }
                 None => {
-                    log::info!(
+                    log::debug!(
                         "skipping storing of unhandled event type: {}",
                         std::any::type_name::<T>()
                     );
@@ -101,7 +101,7 @@ impl EventVec {
                     true
                 }
                 None => {
-                    log::warn!(
+                    log::debug!(
                         "skipping storing of unhandled event type: {}",
                         std::any::type_name::<T>()
                     );

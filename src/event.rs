@@ -264,7 +264,7 @@ impl EventSender {
     pub fn send<E: 'static + Send + Sync>(&self, event: E) -> bool {
         let send = self.head.write().push(event);
         if !send {
-            log::warn!(
+            log::debug!(
                 "skipping sending of unhandled event type: {}",
                 std::any::type_name::<E>()
             );
@@ -280,7 +280,7 @@ impl EventSender {
     ) -> bool {
         let send = self.head.write().extend(events);
         if !send {
-            log::warn!(
+            log::debug!(
                 "skipping sending of unhandled event type: {}",
                 std::any::type_name::<E>()
             );
