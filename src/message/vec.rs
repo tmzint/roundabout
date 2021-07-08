@@ -1,20 +1,20 @@
-use crate::event::buffer::{EventBuffer, EventHeader};
-use crate::event::EventRegistry;
+use crate::message::buffer::{MessageBuffer, MessageHeader};
+use crate::message::MessageRegistry;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 
-pub struct EventVec {
+pub struct MessageVec {
     // Optimization: clone vs arc vs reference
-    registry: EventRegistry,
-    buffer: EventBuffer,
+    registry: MessageRegistry,
+    buffer: MessageBuffer,
     len: usize,
 }
 
-impl EventVec {
+impl MessageVec {
     #[inline]
-    pub fn new(registry: EventRegistry) -> Self {
+    pub fn new(registry: MessageRegistry) -> Self {
         unsafe {
-            let buffer = EventBuffer::new(registry.event_size().inner());
+            let buffer = MessageBuffer::new(registry.message_size().inner());
             Self {
                 registry,
                 buffer,
@@ -24,9 +24,9 @@ impl EventVec {
     }
 
     #[inline]
-    pub fn with_capacity(registry: EventRegistry, cap: usize) -> Self {
+    pub fn with_capacity(registry: MessageRegistry, cap: usize) -> Self {
         unsafe {
-            let buffer = EventBuffer::with_capacity(registry.event_size().inner(), cap);
+            let buffer = MessageBuffer::with_capacity(registry.message_size().inner(), cap);
             Self {
                 registry,
                 buffer,
@@ -46,18 +46,18 @@ impl EventVec {
     }
 
     #[inline]
-    pub fn iter(&self) -> EventVecIter {
-        EventVecIter { vec: self, i: 0 }
+    pub fn iter(&self) -> MessageVecIter {
+        MessageVecIter { vec: self, i: 0 }
     }
 
     #[inline]
-    pub fn push<T: 'static + Send + Sync>(&mut self, event: T) -> bool {
+    pub fn push<T: 'static + Send + Sync>(&mut self, message: T) -> bool {
         unsafe {
             // Optimization: static resolution of e_idx
             match self.registry.get_index_of::<T>() {
                 Some(e_idx) => {
-                    let event = ManuallyDrop::new(event);
-                    let data = event.deref() as *const T as *const u8;
+                    let message = ManuallyDrop::new(message);
+                    let data = message.deref() as *const T as *const u8;
                     let drop_fn: Option<fn(*mut u8)> = if std::mem::needs_drop::<T>() {
                         Some(|ptr| (ptr as *mut T).drop_in_place())
                     } else {
@@ -69,7 +69,7 @@ impl EventVec {
                 }
                 None => {
                     log::debug!(
-                        "skipping storing of unhandled event type: {}",
+                        "skipping storing of unhandled message type: {}",
                         std::any::type_name::<T>()
                     );
                     false
@@ -81,14 +81,14 @@ impl EventVec {
     #[inline]
     pub fn extend<I: IntoIterator<Item = T>, T: 'static + Send + Sync>(
         &mut self,
-        events: I,
+        messages: I,
     ) -> bool {
         unsafe {
             match self.registry.get_index_of::<T>() {
                 Some(e_idx) => {
-                    for event in events.into_iter() {
-                        let event: ManuallyDrop<T> = ManuallyDrop::new(event);
-                        let data = event.deref() as *const T as *const u8;
+                    for message in messages.into_iter() {
+                        let message: ManuallyDrop<T> = ManuallyDrop::new(message);
+                        let data = message.deref() as *const T as *const u8;
                         let drop_fn: Option<fn(*mut u8)> = if std::mem::needs_drop::<T>() {
                             Some(|ptr| (ptr as *mut T).drop_in_place())
                         } else {
@@ -102,7 +102,7 @@ impl EventVec {
                 }
                 None => {
                     log::debug!(
-                        "skipping storing of unhandled event type: {}",
+                        "skipping storing of unhandled message type: {}",
                         std::any::type_name::<T>()
                     );
                     false
@@ -132,19 +132,19 @@ impl EventVec {
         }
 
         let headers = other.buffer.get_header(0);
-        let events = other.buffer.get_event(0);
+        let messages = other.buffer.get_message(0);
         self.buffer
-            .copy_nonoverlapping_all(self.len, headers, events, other.len);
+            .copy_nonoverlapping_all(self.len, headers, messages, other.len);
 
         self.len += other.len;
         other.len = 0;
     }
 
-    pub(crate) fn get_registry(&self) -> &EventRegistry {
+    pub(crate) fn get_registry(&self) -> &MessageRegistry {
         &self.registry
     }
 
-    pub(crate) unsafe fn get_buffer(&self) -> &EventBuffer {
+    pub(crate) unsafe fn get_buffer(&self) -> &MessageBuffer {
         &self.buffer
     }
 
@@ -163,14 +163,14 @@ impl EventVec {
             self.buffer.grow(1);
         }
 
-        let header = EventHeader { e_idx, drop_fn };
+        let header = MessageHeader { e_idx, drop_fn };
         self.buffer
             .copy_nonoverlapping(self.len, header, data, data_size);
         self.len += 1;
     }
 }
 
-impl Drop for EventVec {
+impl Drop for MessageVec {
     fn drop(&mut self) {
         unsafe {
             if self.buffer.cap() == 0 {
@@ -178,7 +178,7 @@ impl Drop for EventVec {
             }
 
             for i in 0..self.len {
-                self.buffer.drop_event(i);
+                self.buffer.drop_message(i);
             }
 
             self.buffer.dealloc();
@@ -186,16 +186,16 @@ impl Drop for EventVec {
     }
 }
 
-unsafe impl Send for EventVec {}
-unsafe impl Sync for EventVec {}
+unsafe impl Send for MessageVec {}
+unsafe impl Sync for MessageVec {}
 
-pub struct EventVecIter<'a> {
-    vec: &'a EventVec,
+pub struct MessageVecIter<'a> {
+    vec: &'a MessageVec,
     i: usize,
 }
 
-impl<'a> Iterator for EventVecIter<'a> {
-    type Item = EventVecView<'a>;
+impl<'a> Iterator for MessageVecIter<'a> {
+    type Item = MessageVecView<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
@@ -204,21 +204,21 @@ impl<'a> Iterator for EventVecIter<'a> {
             }
 
             let header = &*self.vec.buffer.get_header(self.i);
-            let data = self.vec.buffer.get_event(self.i);
+            let data = self.vec.buffer.get_message(self.i);
             self.i += 1;
-            Some(EventVecView { header, data })
+            Some(MessageVecView { header, data })
         }
     }
 }
 
-pub struct EventVecView<'a> {
-    header: &'a EventHeader,
+pub struct MessageVecView<'a> {
+    header: &'a MessageHeader,
     data: *const u8,
 }
 
-impl<'a> EventVecView<'a> {
+impl<'a> MessageVecView<'a> {
     #[inline]
-    pub fn event_idx(&self) -> usize {
+    pub fn message_idx(&self) -> usize {
         self.header.e_idx
     }
 

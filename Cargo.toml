@@ -3,12 +3,12 @@ name = "roundabout"
 version = "0.1.0"
 authors = ["Timo Merlin Zint"]
 edition = "2018"
-description = "An event oriented concurrent runtime"
+description = "An message oriented concurrent runtime"
 readme = "README.md"
 homepage = "https://github.com/tmzint/roundabout/"
 repository = "https://github.com/tmzint/roundabout/"
 license = "MIT OR Apache-2.0"
-keywords = ["concurrency", "event", "bus", "queue"]
+keywords = ["concurrency", "message", "bus", "queue"]
 categories = ["asynchronous", "concurrency"]
 
 #[profile.dev]
@@ -43,7 +43,7 @@ criterion = "^0.3"
 ctrlc = { version = "^3.1", features = ["termination"] }
 
 [[bench]]
-name = "event_bus_bench"
+name = "message_bus_bench"
 harness = false
 
 [[bench]]

@@ -1,7 +1,7 @@
 use roundabout::prelude::*;
 use std::time::Instant;
 
-pub struct PingEvent(u64);
+pub struct PingMessage(u64);
 
 pub struct BlockingState {
     start: Instant,
@@ -9,11 +9,11 @@ pub struct BlockingState {
 }
 
 fn foo_handler(
-    builder: EventHandlerBuilder<BlockingState>,
+    builder: MessageHandlerBuilder<BlockingState>,
     start: Instant,
-) -> EventHandlerBlueprint<BlockingState> {
+) -> MessageHandlerBlueprint<BlockingState> {
     builder
-        .on::<PingEvent>(|state, context, foo| {
+        .on::<PingMessage>(|state, context, foo| {
             state.count += foo.0;
             if state.count % 10000 == 0 {
                 let elapsed = state.start.elapsed();
@@ -24,7 +24,7 @@ fn foo_handler(
                 );
             }
 
-            context.sender().send(PingEvent(1));
+            context.sender().send(PingMessage(1));
         })
         .with(BlockingState { start, count: 0 })
 }
@@ -39,5 +39,5 @@ fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    runtime.start(PingEvent(0));
+    runtime.start(PingMessage(0));
 }

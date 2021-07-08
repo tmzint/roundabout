@@ -1,7 +1,7 @@
-use crate::event::bus::{EventBus, EventBusReceiver, EventBusSender};
-use crate::event::{EventRegistry, EventSender, ShutdownEvent, ShutdownRequestedEvent};
-use crate::handler::{EventHandlerGroup, InitializedEventHandler, RuntimeContext};
-use crate::prelude::EventVec;
+use crate::handler::{InitializedMessageHandler, MessageHandlerGroup, RuntimeContext};
+use crate::message::bus::{MessageBus, MessageBusReceiver, MessageBusSender};
+use crate::message::{MessageRegistry, MessageSender, ShutdownMessage, ShutdownRequestedMessage};
+use crate::prelude::MessageVec;
 use crate::util::cpu::CpuAffinity;
 use crate::util::triple::{TripleBuffered, TripleBufferedHead, TripleBufferedTail};
 use crate::wait::WaitingStrategy;
@@ -55,10 +55,10 @@ impl ShutdownSwitch {
     }
 }
 
-pub struct EventScheduler {
-    registry: Arc<EventRegistry>,
-    groups: Vec<EventHandlerGroup>,
-    primary: Option<EventHandlerGroup>,
+pub struct MessageScheduler {
+    registry: Arc<MessageRegistry>,
+    groups: Vec<MessageHandlerGroup>,
+    primary: Option<MessageHandlerGroup>,
     cpu_affinity: bool,
     min_bus_capacity: usize,
     shutdown_timeout: Duration,
@@ -66,11 +66,11 @@ pub struct EventScheduler {
     shutdown: Arc<AtomicUsize>,
 }
 
-impl EventScheduler {
-    pub fn new<ER: Into<Arc<EventRegistry>>>(
+impl MessageScheduler {
+    pub fn new<ER: Into<Arc<MessageRegistry>>>(
         registry: ER,
-        groups: Vec<EventHandlerGroup>,
-        primary: Option<EventHandlerGroup>,
+        groups: Vec<MessageHandlerGroup>,
+        primary: Option<MessageHandlerGroup>,
         cpu_affinity: bool,
         min_bus_capacity: usize,
         shutdown_timeout: Duration,
@@ -100,7 +100,7 @@ impl EventScheduler {
             let mut tails = Vec::with_capacity(pipeline_count);
             let mut handles = Vec::with_capacity(pipeline_count);
 
-            let (bus_sender, mut bus_receivers) = EventBus::bounded(
+            let (bus_sender, mut bus_receivers) = MessageBus::bounded(
                 self.registry.deref().to_owned(),
                 self.min_bus_capacity,
                 pipeline_count,
@@ -123,9 +123,9 @@ impl EventScheduler {
                 let receiver = bus_receivers.pop().unwrap();
 
                 let (head, tail) = TripleBuffered::new([
-                    EventVec::new(self.registry.deref().to_owned()),
-                    EventVec::new(self.registry.deref().to_owned()),
-                    EventVec::new(self.registry.deref().to_owned()),
+                    MessageVec::new(self.registry.deref().to_owned()),
+                    MessageVec::new(self.registry.deref().to_owned()),
+                    MessageVec::new(self.registry.deref().to_owned()),
                 ]);
                 tails.push(tail);
 
@@ -140,9 +140,9 @@ impl EventScheduler {
                 let receiver = bus_receivers.pop().unwrap();
 
                 let (head, tail) = TripleBuffered::new([
-                    EventVec::new(self.registry.deref().to_owned()),
-                    EventVec::new(self.registry.deref().to_owned()),
-                    EventVec::new(self.registry.deref().to_owned()),
+                    MessageVec::new(self.registry.deref().to_owned()),
+                    MessageVec::new(self.registry.deref().to_owned()),
+                    MessageVec::new(self.registry.deref().to_owned()),
                 ]);
                 tails.push(tail);
 
@@ -185,8 +185,8 @@ impl EventScheduler {
 
 unsafe fn run_router<E: 'static + Send + Sync>(
     init: E,
-    tails: Vec<TripleBufferedTail<EventVec>>,
-    mut bus_sender: EventBusSender,
+    tails: Vec<TripleBufferedTail<MessageVec>>,
+    mut bus_sender: MessageBusSender,
     cpu: CpuAffinity,
     shutdown_timeout: Duration,
     shutdown: &AtomicUsize,
@@ -202,17 +202,17 @@ unsafe fn run_router<E: 'static + Send + Sync>(
 
     loop {
         for tail in &tails {
-            let mut events = tail.advance();
-            buffer.extend_vec_unchecked(&mut events);
+            let mut messages = tail.advance();
+            buffer.extend_vec_unchecked(&mut messages);
         }
 
         match shutdown.load(Ordering::Relaxed) {
             SHUTDOWN_NONE => {}
             SHUTDOWN_ORDERLY => match shutdown_timeout_at {
                 None => {
-                    if !buffer.push(ShutdownRequestedEvent::new()) {
+                    if !buffer.push(ShutdownRequestedMessage::new()) {
                         log::info!(
-                            "instant shutdown as no event handler for the request was registered"
+                            "instant shutdown as no message handler for the request was registered"
                         );
                         let _ = shutdown.compare_exchange(
                             SHUTDOWN_ORDERLY,
@@ -236,7 +236,7 @@ unsafe fn run_router<E: 'static + Send + Sync>(
             },
             SHUTDOWN_FINISH => {
                 log::info!("finishing shutdown");
-                buffer.push(ShutdownEvent::new());
+                buffer.push(ShutdownMessage::new());
                 bus_sender.send_all(&mut buffer);
                 bus_sender.flush_padding();
                 return;
@@ -259,9 +259,9 @@ unsafe fn run_router<E: 'static + Send + Sync>(
 }
 
 fn run_pipeline(
-    mut group: EventHandlerGroup,
-    head: TripleBufferedHead<EventVec>,
-    receiver: EventBusReceiver,
+    mut group: MessageHandlerGroup,
+    head: TripleBufferedHead<MessageVec>,
+    receiver: MessageBusReceiver,
     cpu: CpuAffinity,
     shutdown: Arc<AtomicUsize>,
 ) {
@@ -269,15 +269,15 @@ fn run_pipeline(
     let panic_bomb = PipelinePanicBomb(&panic_shutdown);
     cpu.apply_for_current();
 
-    let event_sender = EventSender::new(head);
+    let message_sender = MessageSender::new(head);
     let shutdown_switch = ShutdownSwitch { shutdown };
-    let context = RuntimeContext::new(event_sender, shutdown_switch);
+    let context = RuntimeContext::new(message_sender, shutdown_switch);
 
     let blocking = group.take_blocking();
     let mut handlers = group.initialize(&context);
 
     match (handlers.len(), blocking) {
-        (1, None) => EventPipelineSingle {
+        (1, None) => MessagePipelineSingle {
             receiver,
             context,
             handler: handlers.pop().unwrap(),
@@ -285,7 +285,7 @@ fn run_pipeline(
         .trim_horizon_blocking(),
 
         (1, Some(blocking)) => {
-            let pipeline = EventPipelineSingle {
+            let pipeline = MessagePipelineSingle {
                 receiver,
                 context,
                 handler: handlers.pop().unwrap(),
@@ -293,7 +293,7 @@ fn run_pipeline(
             (blocking)(pipeline);
         }
 
-        (_, None) => EventPipelineMulti {
+        (_, None) => MessagePipelineMulti {
             receiver,
             context,
             handlers,
@@ -327,22 +327,22 @@ impl<'a> Drop for PipelinePanicBomb<'a> {
     }
 }
 
-pub struct EventPipelineMulti {
-    receiver: EventBusReceiver,
+pub struct MessagePipelineMulti {
+    receiver: MessageBusReceiver,
     context: RuntimeContext,
-    handlers: Vec<InitializedEventHandler>,
+    handlers: Vec<InitializedMessageHandler>,
 }
 
-impl EventPipelineMulti {
+impl MessagePipelineMulti {
     pub fn trim_horizon_blocking(mut self) {
         unsafe {
             loop {
-                let event = self.receiver.recv();
+                let message = self.receiver.recv();
                 for handler in &mut self.handlers {
-                    handler.handle(&mut self.context, event.event_idx(), event.data());
+                    handler.handle(&mut self.context, message.message_idx(), message.data());
                 }
 
-                if event.event_idx() == ShutdownEvent::EVENT_INDEX {
+                if message.message_idx() == ShutdownMessage::MESSAGE_INDEX {
                     return;
                 }
             }
@@ -350,19 +350,19 @@ impl EventPipelineMulti {
     }
 }
 
-pub struct EventPipelineSingle {
-    receiver: EventBusReceiver,
+pub struct MessagePipelineSingle {
+    receiver: MessageBusReceiver,
     context: RuntimeContext,
-    handler: InitializedEventHandler,
+    handler: InitializedMessageHandler,
 }
 
-impl EventPipelineSingle {
+impl MessagePipelineSingle {
     #[inline]
     pub fn trim_horizon(&mut self) {
         unsafe {
-            while let Some(event) = self.receiver.try_recv() {
+            while let Some(message) = self.receiver.try_recv() {
                 self.handler
-                    .handle(&mut self.context, event.event_idx(), event.data());
+                    .handle(&mut self.context, message.message_idx(), message.data());
             }
         }
     }
@@ -371,11 +371,11 @@ impl EventPipelineSingle {
     pub fn trim_horizon_blocking(mut self) {
         unsafe {
             loop {
-                let event = self.receiver.recv();
+                let message = self.receiver.recv();
                 self.handler
-                    .handle(&mut self.context, event.event_idx(), event.data());
+                    .handle(&mut self.context, message.message_idx(), message.data());
 
-                if event.event_idx() == ShutdownEvent::EVENT_INDEX {
+                if message.message_idx() == ShutdownMessage::MESSAGE_INDEX {
                     return;
                 }
             }
@@ -383,17 +383,17 @@ impl EventPipelineSingle {
     }
 }
 
-pub struct EventPipeline<T> {
-    pipeline: EventPipelineSingle,
+pub struct MessagePipeline<T> {
+    pipeline: MessagePipelineSingle,
     _pd: PhantomData<T>,
 }
 
-impl<T> EventPipeline<T> {
+impl<T> MessagePipeline<T> {
     /**
     Safety:
-        * the type has to match the type of the state of the enclosed InitializedEventHandler
+        * the type has to match the type of the state of the enclosed InitializedMessageHandler
     */
-    pub(crate) unsafe fn new(pipeline: EventPipelineSingle) -> Self {
+    pub(crate) unsafe fn new(pipeline: MessagePipelineSingle) -> Self {
         Self {
             pipeline,
             _pd: Default::default(),
@@ -418,16 +418,16 @@ impl<T> EventPipeline<T> {
             }
 
             loop {
-                let event = self.pipeline.receiver.recv();
+                let message = self.pipeline.receiver.recv();
                 self.pipeline.handler.handle(
                     &mut self.pipeline.context,
-                    event.event_idx(),
-                    event.data(),
+                    message.message_idx(),
+                    message.data(),
                 );
 
-                // Optimization: only check condition when handler actually handles event
+                // Optimization: only check condition when handler actually handles message
                 let state = &*(self.pipeline.handler.state() as *const T);
-                if condition(state) || event.event_idx() == ShutdownEvent::EVENT_INDEX {
+                if condition(state) || message.message_idx() == ShutdownMessage::MESSAGE_INDEX {
                     return;
                 }
             }

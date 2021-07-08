@@ -7,18 +7,18 @@ struct Ping(u64);
 struct Stop(bool);
 
 pub fn ping_send(b: &mut Bencher<WallTime>, n: usize, t: usize, ws: WaitingStrategy) {
-    let mut registry = EventRegistry::new();
+    let mut registry = MessageRegistry::new();
     let _ping_id = registry.register_of::<Ping>();
     let stop_id = registry.register_of::<Stop>();
 
     b.iter_custom(|iters| {
-        let (mut sender, receivers) = EventBus::bounded(registry.clone(), 1024, t, ws);
+        let (mut sender, receivers) = MessageBus::bounded(registry.clone(), 1024, t, ws);
         let mut handles = vec![];
 
         for mut receiver in receivers {
             handles.push(std::thread::spawn(move || loop {
-                let event = receiver.recv();
-                if event.event_idx() == stop_id {
+                let message = receiver.recv();
+                if message.message_idx() == stop_id {
                     break;
                 }
             }));
@@ -42,19 +42,19 @@ pub fn ping_send(b: &mut Bencher<WallTime>, n: usize, t: usize, ws: WaitingStrat
 }
 
 pub fn ping_send_all(b: &mut Bencher<WallTime>, n: usize, t: usize, ws: WaitingStrategy) {
-    let mut registry = EventRegistry::new();
+    let mut registry = MessageRegistry::new();
     let _ping_id = registry.register_of::<Ping>();
     let stop_id = registry.register_of::<Stop>();
 
     b.iter_custom(|iters| {
-        let mut buffer = EventVec::with_capacity(registry.clone(), 10);
-        let (mut sender, receivers) = EventBus::bounded(registry.clone(), 1024, t, ws);
+        let mut buffer = MessageVec::with_capacity(registry.clone(), 10);
+        let (mut sender, receivers) = MessageBus::bounded(registry.clone(), 1024, t, ws);
         let mut handles = vec![];
 
         for mut receiver in receivers {
             handles.push(std::thread::spawn(move || loop {
-                let event = receiver.recv();
-                if event.event_idx() == stop_id {
+                let message = receiver.recv();
+                if message.message_idx() == stop_id {
                     break;
                 }
             }));
@@ -89,10 +89,10 @@ pub fn ping_send_all(b: &mut Bencher<WallTime>, n: usize, t: usize, ws: WaitingS
     });
 }
 
-pub fn event_bus_ping(c: &mut Criterion) {
+pub fn message_bus_ping(c: &mut Criterion) {
     const N: usize = 50000;
 
-    c.benchmark_group("EventBus: send")
+    c.benchmark_group("MessageBus: send")
         .throughput(Throughput::Elements(N as u64))
         .bench_function(format!("0 recv - {}", N), |b| {
             ping_send(b, black_box(N), 0, WaitingStrategy::SpinYield)
@@ -112,7 +112,7 @@ pub fn event_bus_ping(c: &mut Criterion) {
 
     const BUFFER_N: usize = N / 10;
     assert_eq!(N % 10, 0);
-    c.benchmark_group("EventBus: send_all (10 buffered)")
+    c.benchmark_group("MessageBus: send_all (10 buffered)")
         .throughput(Throughput::Elements(N as u64))
         .bench_function(format!("0 recv - {}", N), |b| {
             ping_send_all(b, black_box(BUFFER_N), 0, WaitingStrategy::SpinYield)

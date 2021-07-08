@@ -1,21 +1,21 @@
 use roundabout::prelude::*;
 
 #[derive(Debug)]
-pub struct PingEvent(u64);
+pub struct PingMessage(u64);
 
 #[derive(Debug)]
-pub struct PongEvent(u64);
+pub struct PongMessage(u64);
 
 #[derive(Default)]
 pub struct PingState {
     count: u64,
 }
 
-fn ping_handler(builder: EventHandlerBuilder<PingState>) -> EventHandlerBlueprint<PingState> {
+fn ping_handler(builder: MessageHandlerBuilder<PingState>) -> MessageHandlerBlueprint<PingState> {
     builder
-        .on::<PingEvent>(|state, context, ping| {
+        .on::<PingMessage>(|state, context, ping| {
             println!("Ping: {:?}", ping);
-            context.sender().send(PongEvent(state.count));
+            context.sender().send(PongMessage(state.count));
             state.count += 1;
         })
         .with_default()
@@ -26,12 +26,12 @@ pub struct PongState {
     count: u64,
 }
 
-fn pong_handler(builder: EventHandlerBuilder<PongState>) -> EventHandlerBlueprint<PongState> {
+fn pong_handler(builder: MessageHandlerBuilder<PongState>) -> MessageHandlerBlueprint<PongState> {
     builder
-        .on::<PongEvent>(|state, context, pong| {
+        .on::<PongMessage>(|state, context, pong| {
             println!("Pong: {:?}", pong);
             state.count += 1;
-            context.sender().send(PingEvent(state.count));
+            context.sender().send(PingMessage(state.count));
         })
         .with_default()
 }
@@ -41,5 +41,5 @@ fn main() {
         .register(ping_handler)
         .register(pong_handler)
         .finish()
-        .start(PingEvent(0));
+        .start(PingMessage(0));
 }

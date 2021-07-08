@@ -1,6 +1,6 @@
-use crate::event::{EventRegistry, EventSender, EventSize};
-use crate::prelude::EventPipeline;
-use crate::schedule::{EventPipelineSingle, ShutdownSwitch};
+use crate::message::{MessageRegistry, MessageSender, MessageSize};
+use crate::prelude::MessagePipeline;
+use crate::schedule::{MessagePipelineSingle, ShutdownSwitch};
 use crate::util::HashMap;
 use core::mem;
 use std::alloc::Layout;
@@ -10,12 +10,12 @@ use std::marker::PhantomData;
 // TODO: use TypeStates to minimize temporary structures
 
 pub struct RuntimeContext {
-    sender: EventSender,
+    sender: MessageSender,
     shutdown_switch: ShutdownSwitch,
 }
 
 impl RuntimeContext {
-    pub(crate) fn new(sender: EventSender, shutdown_switch: ShutdownSwitch) -> Self {
+    pub(crate) fn new(sender: MessageSender, shutdown_switch: ShutdownSwitch) -> Self {
         Self {
             sender,
             shutdown_switch,
@@ -23,7 +23,7 @@ impl RuntimeContext {
     }
 
     #[inline]
-    pub fn sender(&self) -> &EventSender {
+    pub fn sender(&self) -> &MessageSender {
         &self.sender
     }
 
@@ -33,14 +33,14 @@ impl RuntimeContext {
     }
 }
 
-pub struct EventGroupBuilder<'a> {
-    registry: &'a mut EventRegistry,
-    handlers: Vec<EventHandler>,
-    blocking: Option<Box<dyn FnOnce(EventPipelineSingle) + 'static + Send>>,
+pub struct MessageGroupBuilder<'a> {
+    registry: &'a mut MessageRegistry,
+    handlers: Vec<MessageHandler>,
+    blocking: Option<Box<dyn FnOnce(MessagePipelineSingle) + 'static + Send>>,
 }
 
-impl<'a> EventGroupBuilder<'a> {
-    pub fn new(registry: &'a mut EventRegistry) -> Self {
+impl<'a> MessageGroupBuilder<'a> {
+    pub fn new(registry: &'a mut MessageRegistry) -> Self {
         Self {
             registry,
             handlers: vec![],
@@ -50,14 +50,14 @@ impl<'a> EventGroupBuilder<'a> {
 
     pub fn register<T: 'static, H>(mut self, handler: H) -> Self
     where
-        H: Fn(EventHandlerBuilder<T>) -> EventHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T>) -> MessageHandlerBlueprint<T>,
     {
         assert!(self.blocking.is_none());
-        let builder = EventHandlerBuilder::new();
+        let builder = MessageHandlerBuilder::new();
         let blueprint = handler(builder);
         self.registry.register_all(
             blueprint.builder.jmp_map.keys().copied(),
-            blueprint.builder.max_event_size,
+            blueprint.builder.max_message_size,
         );
         self.handlers.push(blueprint.finish(&self.registry));
         self
@@ -65,42 +65,44 @@ impl<'a> EventGroupBuilder<'a> {
 
     pub(crate) fn register_blocking<T: 'static, H>(mut self, blocking_handler: H) -> Self
     where
-        H: Fn(EventHandlerBuilder<T>) -> BlockingEventHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T>) -> BlockingMessageHandlerBlueprint<T>,
     {
         assert!(self.blocking.is_none());
         assert!(self.handlers.is_empty());
 
-        let builder = EventHandlerBuilder::new();
-        let BlockingEventHandlerBlueprint {
+        let builder = MessageHandlerBuilder::new();
+        let BlockingMessageHandlerBlueprint {
             blueprint,
             blocking,
         } = blocking_handler(builder);
 
         self.registry.register_all(
             blueprint.builder.jmp_map.keys().copied(),
-            blueprint.builder.max_event_size,
+            blueprint.builder.max_message_size,
         );
         self.handlers.push(blueprint.finish(&self.registry));
 
-        self.blocking = Some(Box::new(|sep| unsafe { blocking(EventPipeline::new(sep)) }));
+        self.blocking = Some(Box::new(|sep| unsafe {
+            blocking(MessagePipeline::new(sep))
+        }));
 
         self
     }
 
-    pub(crate) fn finish(self) -> EventHandlerGroup {
-        EventHandlerGroup {
+    pub(crate) fn finish(self) -> MessageHandlerGroup {
+        MessageHandlerGroup {
             handlers: self.handlers,
             blocking: self.blocking,
         }
     }
 }
 
-pub struct EventHandlerGroup {
-    handlers: Vec<EventHandler>,
-    blocking: Option<Box<dyn FnOnce(EventPipelineSingle) + 'static + Send>>,
+pub struct MessageHandlerGroup {
+    handlers: Vec<MessageHandler>,
+    blocking: Option<Box<dyn FnOnce(MessagePipelineSingle) + 'static + Send>>,
 }
 
-impl EventHandlerGroup {
+impl MessageHandlerGroup {
     pub(crate) fn fill_jmp_tbl(&mut self, length: usize) {
         for handler in &mut self.handlers {
             handler.fill_jmp_tbl(length);
@@ -109,11 +111,11 @@ impl EventHandlerGroup {
 
     pub(crate) fn take_blocking(
         &mut self,
-    ) -> Option<Box<dyn FnOnce(EventPipelineSingle) + 'static + Send>> {
+    ) -> Option<Box<dyn FnOnce(MessagePipelineSingle) + 'static + Send>> {
         self.blocking.take()
     }
 
-    pub(crate) fn initialize(self, context: &RuntimeContext) -> Vec<InitializedEventHandler> {
+    pub(crate) fn initialize(self, context: &RuntimeContext) -> Vec<InitializedMessageHandler> {
         self.handlers
             .into_iter()
             .map(|h| h.initialize(context))
@@ -121,17 +123,17 @@ impl EventHandlerGroup {
     }
 }
 
-pub struct EventHandlerBuilder<T> {
+pub struct MessageHandlerBuilder<T> {
     jmp_map: HashMap<TypeId, fn(*mut u8, &mut RuntimeContext, *const u8)>,
-    max_event_size: EventSize,
+    max_message_size: MessageSize,
     pd: PhantomData<T>,
 }
 
-impl<T: 'static> EventHandlerBuilder<T> {
+impl<T: 'static> MessageHandlerBuilder<T> {
     pub(crate) fn new() -> Self {
         Self {
             jmp_map: Default::default(),
-            max_event_size: Default::default(),
+            max_message_size: Default::default(),
             pd: Default::default(),
         }
     }
@@ -141,11 +143,11 @@ impl<T: 'static> EventHandlerBuilder<T> {
         f: fn(&mut T, &mut RuntimeContext, e: &E),
     ) -> Self {
         let tid = TypeId::of::<E>();
-        self.max_event_size = self.max_event_size.max(EventSize::of::<E>());
+        self.max_message_size = self.max_message_size.max(MessageSize::of::<E>());
         let prev = self.jmp_map.insert(tid, unsafe { std::mem::transmute(f) });
         if prev.is_some() {
             panic!(
-                "override of event handler branch for: {}",
+                "override of message handler branch for: {}",
                 std::any::type_name::<E>()
             )
         }
@@ -156,51 +158,51 @@ impl<T: 'static> EventHandlerBuilder<T> {
     pub fn with_factory<F: FnOnce(&RuntimeContext) -> T + 'static + Send>(
         self,
         state_init: F,
-    ) -> EventHandlerBlueprint<T> {
-        EventHandlerBlueprint {
+    ) -> MessageHandlerBlueprint<T> {
+        MessageHandlerBlueprint {
             builder: self,
             state_init: Box::new(state_init),
         }
     }
 }
 
-impl<T: 'static + Send> EventHandlerBuilder<T> {
-    pub fn with(self, state: T) -> EventHandlerBlueprint<T> {
-        EventHandlerBlueprint {
+impl<T: 'static + Send> MessageHandlerBuilder<T> {
+    pub fn with(self, state: T) -> MessageHandlerBlueprint<T> {
+        MessageHandlerBlueprint {
             builder: self,
             state_init: Box::new(|_| state),
         }
     }
 }
 
-impl<T: 'static + Default> EventHandlerBuilder<T> {
-    pub fn with_default(self) -> EventHandlerBlueprint<T> {
-        EventHandlerBlueprint {
+impl<T: 'static + Default> MessageHandlerBuilder<T> {
+    pub fn with_default(self) -> MessageHandlerBlueprint<T> {
+        MessageHandlerBlueprint {
             builder: self,
             state_init: Box::new(|_| T::default()),
         }
     }
 }
 
-unsafe impl<T: 'static> Send for EventHandlerBuilder<T> {}
+unsafe impl<T: 'static> Send for MessageHandlerBuilder<T> {}
 
-pub struct EventHandlerBlueprint<T> {
-    builder: EventHandlerBuilder<T>,
+pub struct MessageHandlerBlueprint<T> {
+    builder: MessageHandlerBuilder<T>,
     state_init: Box<dyn FnOnce(&RuntimeContext) -> T + 'static + Send>,
 }
 
-impl<T: 'static> EventHandlerBlueprint<T> {
-    pub fn block<F>(self, blocking: F) -> BlockingEventHandlerBlueprint<T>
+impl<T: 'static> MessageHandlerBlueprint<T> {
+    pub fn block<F>(self, blocking: F) -> BlockingMessageHandlerBlueprint<T>
     where
-        F: FnOnce(EventPipeline<T>) + 'static + Send,
+        F: FnOnce(MessagePipeline<T>) + 'static + Send,
     {
-        BlockingEventHandlerBlueprint {
+        BlockingMessageHandlerBlueprint {
             blueprint: self,
             blocking: Box::new(blocking),
         }
     }
 
-    pub(crate) fn finish(self, registry: &EventRegistry) -> EventHandler {
+    pub(crate) fn finish(self, registry: &MessageRegistry) -> MessageHandler {
         unsafe {
             let mut jmp_tbl = Vec::with_capacity(registry.len());
             for _ in 0..registry.len() {
@@ -208,29 +210,29 @@ impl<T: 'static> EventHandlerBlueprint<T> {
             }
 
             for (k, f) in self.builder.jmp_map {
-                let idx = registry.get_index(k).expect("registered event");
+                let idx = registry.get_index(k).expect("registered message");
                 jmp_tbl[idx] = Some(f);
             }
 
-            EventHandler::new(self.state_init, jmp_tbl)
+            MessageHandler::new(self.state_init, jmp_tbl)
         }
     }
 }
 
-unsafe impl<T: 'static> Send for EventHandlerBlueprint<T> {}
+unsafe impl<T: 'static> Send for MessageHandlerBlueprint<T> {}
 
-pub struct BlockingEventHandlerBlueprint<T> {
-    pub(crate) blueprint: EventHandlerBlueprint<T>,
-    pub(crate) blocking: Box<dyn FnOnce(EventPipeline<T>) + 'static + Send>,
+pub struct BlockingMessageHandlerBlueprint<T> {
+    pub(crate) blueprint: MessageHandlerBlueprint<T>,
+    pub(crate) blocking: Box<dyn FnOnce(MessagePipeline<T>) + 'static + Send>,
 }
 
-pub struct EventHandler {
+pub struct MessageHandler {
     state_init: Box<dyn for<'a> FnOnce(&'a RuntimeContext) -> *mut u8>,
     jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8)>>,
     destructor: fn(*mut u8),
 }
 
-impl EventHandler {
+impl MessageHandler {
     unsafe fn new<T: 'static>(
         state_init: Box<dyn for<'a> FnOnce(&'a RuntimeContext) -> T + 'static + Send>,
         jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8)>>,
@@ -265,8 +267,8 @@ impl EventHandler {
         }
     }
 
-    pub(crate) fn initialize(self, context: &RuntimeContext) -> InitializedEventHandler {
-        InitializedEventHandler {
+    pub(crate) fn initialize(self, context: &RuntimeContext) -> InitializedMessageHandler {
+        InitializedMessageHandler {
             state: (self.state_init)(context),
             jmp_tbl: self.jmp_tbl,
             destructor: self.destructor,
@@ -274,14 +276,14 @@ impl EventHandler {
     }
 }
 
-unsafe impl Send for EventHandler {}
+unsafe impl Send for MessageHandler {}
 
-pub struct InitializedEventHandler {
+pub struct InitializedMessageHandler {
     state: *mut u8,
     // Optimization: jmp_tbl size
-    //  don't fully represent all types but use (max_event_idx - min_event_idx + 1) length of a jump table.
-    //  offsets can then be applied to the given event_idx to map it to the sub section
-    //  this then can be further optimized by rearranging the event indexes e.g. via hill climbing.
+    //  don't fully represent all types but use (max_message_idx - min_message_idx + 1) length of a jump table.
+    //  offsets can then be applied to the given message_idx to map it to the sub section
+    //  this then can be further optimized by rearranging the message indexes e.g. via hill climbing.
     //  The initial order should already be partially ordered as they are based on handler registrations.
     //  see: https://stackoverflow.com/questions/18570427/how-to-optimize-the-size-of-jump-tables
     //
@@ -294,21 +296,21 @@ pub struct InitializedEventHandler {
     destructor: fn(*mut u8),
 }
 
-impl InitializedEventHandler {
+impl InitializedMessageHandler {
     /**
     Safety:
-        * the payload needs to correspond to the event type associated with the event index
+        * the payload needs to correspond to the message type associated with the message index
     */
     pub(crate) unsafe fn handle(
         &mut self,
         context: &mut RuntimeContext,
-        event_index: usize,
-        event_payload: *const u8,
+        message_index: usize,
+        message_payload: *const u8,
     ) {
         // Optimization: if vs noop fn
         // Optimization: use unchecked get with full jump table
-        if let Some(Some(f)) = self.jmp_tbl.get(event_index) {
-            f(self.state, context, event_payload);
+        if let Some(Some(f)) = self.jmp_tbl.get(message_index) {
+            f(self.state, context, message_payload);
         }
     }
 
@@ -317,7 +319,7 @@ impl InitializedEventHandler {
     }
 }
 
-impl Drop for InitializedEventHandler {
+impl Drop for InitializedMessageHandler {
     fn drop(&mut self) {
         (self.destructor)(self.state);
     }
@@ -325,84 +327,84 @@ impl Drop for InitializedEventHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::{EventHandlerBuilder, EventRegistry, RuntimeContext};
-    use crate::event::vec::EventVec;
-    use crate::event::EventSender;
+    use super::{MessageHandlerBuilder, MessageRegistry, RuntimeContext};
+    use crate::message::vec::MessageVec;
+    use crate::message::MessageSender;
     use crate::schedule::ShutdownSwitch;
     use crate::util::triple::TripleBuffered;
     use std::sync::Arc;
 
     #[test]
-    fn on_event_handler() {
-        let blueprint = EventHandlerBuilder::new()
-            .on::<usize>(|u, _s, event| *u = *u + *event)
+    fn on_message_handler() {
+        let blueprint = MessageHandlerBuilder::new()
+            .on::<usize>(|u, _s, message| *u = *u + *message)
             .with_factory(|_| 1usize);
 
-        let mut registry = EventRegistry::default();
+        let mut registry = MessageRegistry::default();
         registry.register_all(
             blueprint.builder.jmp_map.keys().copied(),
-            blueprint.builder.max_event_size,
+            blueprint.builder.max_message_size,
         );
 
-        let event_handler = blueprint.finish(&registry);
+        let message_handler = blueprint.finish(&registry);
 
         let e: usize = usize::MAX - 1;
         let idx = registry.get_index_of::<usize>().unwrap();
 
         let (head, _) = TripleBuffered::new([
-            EventVec::new(registry.clone()),
-            EventVec::new(registry.clone()),
-            EventVec::new(registry),
+            MessageVec::new(registry.clone()),
+            MessageVec::new(registry.clone()),
+            MessageVec::new(registry),
         ]);
-        let mut context = RuntimeContext::new(EventSender::new(head), ShutdownSwitch::noop());
+        let mut context = RuntimeContext::new(MessageSender::new(head), ShutdownSwitch::noop());
 
         unsafe {
-            let event_payload = (&e as *const usize) as *const u8;
-            let mut initialized_event_handler = event_handler.initialize(&context);
-            initialized_event_handler.handle(&mut context, idx, event_payload);
+            let message_payload = (&e as *const usize) as *const u8;
+            let mut initialized_message_handler = message_handler.initialize(&context);
+            initialized_message_handler.handle(&mut context, idx, message_payload);
             assert_eq!(
-                *(&*(initialized_event_handler.state as *const usize)),
+                *(&*(initialized_message_handler.state as *const usize)),
                 usize::MAX
             );
         }
     }
 
     #[test]
-    fn drop_event_handler_blueprint() {
-        let builder: EventHandlerBuilder<Arc<()>> = EventHandlerBuilder::new();
+    fn drop_message_handler_blueprint() {
+        let builder: MessageHandlerBuilder<Arc<()>> = MessageHandlerBuilder::new();
         let arc: Arc<()> = Arc::new(());
-        let event_handler = builder.with(arc.clone());
+        let message_handler = builder.with(arc.clone());
         assert_eq!(Arc::strong_count(&arc), 2);
-        std::mem::drop(event_handler);
+        std::mem::drop(message_handler);
         assert_eq!(Arc::strong_count(&arc), 1);
     }
 
     #[test]
-    fn drop_event_handler() {
-        let builder: EventHandlerBuilder<Arc<()>> = EventHandlerBuilder::new();
-        let registry = EventRegistry::default();
+    fn drop_message_handler() {
+        let builder: MessageHandlerBuilder<Arc<()>> = MessageHandlerBuilder::new();
+        let registry = MessageRegistry::default();
         let arc: Arc<()> = Arc::new(());
-        let event_handler = builder.with(arc.clone()).finish(&registry);
+        let message_handler = builder.with(arc.clone()).finish(&registry);
         assert_eq!(Arc::strong_count(&arc), 2);
-        std::mem::drop(event_handler);
+        std::mem::drop(message_handler);
         assert_eq!(Arc::strong_count(&arc), 1);
     }
 
     #[test]
-    fn drop_initialized_event_handler() {
-        let builder: EventHandlerBuilder<Arc<()>> = EventHandlerBuilder::new();
-        let registry = EventRegistry::default();
+    fn drop_initialized_message_handler() {
+        let builder: MessageHandlerBuilder<Arc<()>> = MessageHandlerBuilder::new();
+        let registry = MessageRegistry::default();
         let arc: Arc<()> = Arc::new(());
         let context = RuntimeContext::new(
-            EventSender::new(TripleBuffered::new_fn(|| EventVec::new(registry.clone())).0),
+            MessageSender::new(TripleBuffered::new_fn(|| MessageVec::new(registry.clone())).0),
             ShutdownSwitch::noop(),
         );
-        let initialized_event_handler = builder
+        let initialized_message_handler = builder
             .with(arc.clone())
             .finish(&registry)
             .initialize(&context);
         assert_eq!(Arc::strong_count(&arc), 2);
-        std::mem::drop(initialized_event_handler);
+        std::mem::drop(initialized_message_handler);
         assert_eq!(Arc::strong_count(&arc), 1);
     }
 }

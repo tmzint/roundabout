@@ -1,9 +1,9 @@
 use roundabout::prelude::*;
 use std::time::Instant;
 
-pub struct InitEvent;
-pub struct PingEvent(u64);
-pub struct PongEvent(u64);
+pub struct InitMessage;
+pub struct PingMessage(u64);
+pub struct PongMessage(u64);
 
 const INIT_N: usize = 64;
 
@@ -13,17 +13,17 @@ pub struct PingState {
 }
 
 fn ping_handler(
-    builder: EventHandlerBuilder<PingState>,
+    builder: MessageHandlerBuilder<PingState>,
     start: Instant,
-) -> EventHandlerBlueprint<PingState> {
+) -> MessageHandlerBlueprint<PingState> {
     builder
-        .on::<InitEvent>(|_state, context, _init| {
+        .on::<InitMessage>(|_state, context, _init| {
             println!("init ping");
             for _ in 0..INIT_N {
-                context.sender().send(PingEvent(1));
+                context.sender().send(PingMessage(1));
             }
         })
-        .on::<PingEvent>(|state, context, ping| {
+        .on::<PingMessage>(|state, context, ping| {
             state.count += ping.0;
             if state.count % 10000 == 0 {
                 let elapsed = state.start.elapsed();
@@ -34,7 +34,7 @@ fn ping_handler(
                 );
             }
 
-            context.sender().send(PongEvent(1));
+            context.sender().send(PongMessage(1));
         })
         .with(PingState { start, count: 0 })
 }
@@ -45,17 +45,17 @@ pub struct PongState {
 }
 
 fn pong_handler(
-    builder: EventHandlerBuilder<PongState>,
+    builder: MessageHandlerBuilder<PongState>,
     start: Instant,
-) -> EventHandlerBlueprint<PongState> {
+) -> MessageHandlerBlueprint<PongState> {
     builder
-        .on::<InitEvent>(|_state, context, _init| {
+        .on::<InitMessage>(|_state, context, _init| {
             println!("init pong");
             for _ in 0..INIT_N {
-                context.sender().send(PongEvent(1));
+                context.sender().send(PongMessage(1));
             }
         })
-        .on::<PongEvent>(|state, context, pong| {
+        .on::<PongMessage>(|state, context, pong| {
             state.count += pong.0;
             if state.count % 10000 == 0 {
                 let elapsed = state.start.elapsed();
@@ -66,7 +66,7 @@ fn pong_handler(
                 );
             }
 
-            context.sender().send(PingEvent(1));
+            context.sender().send(PingMessage(1));
         })
         .with(PongState { start, count: 0 })
 }
@@ -84,5 +84,5 @@ fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    runtime.start(InitEvent);
+    runtime.start(InitMessage);
 }

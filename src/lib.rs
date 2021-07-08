@@ -1,15 +1,15 @@
-use crate::event::EventRegistry;
 use crate::handler::{
-    BlockingEventHandlerBlueprint, EventGroupBuilder, EventHandlerBlueprint, EventHandlerBuilder,
-    EventHandlerGroup,
+    BlockingMessageHandlerBlueprint, MessageGroupBuilder, MessageHandlerBlueprint,
+    MessageHandlerBuilder, MessageHandlerGroup,
 };
-use crate::schedule::{EventScheduler, ShutdownSwitch};
+use crate::message::MessageRegistry;
+use crate::schedule::{MessageScheduler, ShutdownSwitch};
 use crate::wait::WaitingStrategy;
 use std::sync::Arc;
 use std::time::Duration;
 
-mod event;
 mod handler;
+mod message;
 pub mod prelude;
 mod schedule;
 mod util;
@@ -20,9 +20,9 @@ pub struct RuntimeBuilder {
     min_bus_capacity: usize,
     shutdown_timeout: Duration,
     waiting_strategy: WaitingStrategy,
-    registry: EventRegistry,
-    groups: Vec<EventHandlerGroup>,
-    primary: Option<EventHandlerGroup>,
+    registry: MessageRegistry,
+    groups: Vec<MessageHandlerGroup>,
+    primary: Option<MessageHandlerGroup>,
 }
 
 impl RuntimeBuilder {
@@ -38,43 +38,43 @@ impl RuntimeBuilder {
 
     pub fn register_group<F>(mut self, group: F) -> Self
     where
-        F: FnOnce(EventGroupBuilder) -> EventGroupBuilder,
+        F: FnOnce(MessageGroupBuilder) -> MessageGroupBuilder,
     {
-        let builder = group(EventGroupBuilder::new(&mut self.registry));
+        let builder = group(MessageGroupBuilder::new(&mut self.registry));
         self.groups.push(builder.finish());
         self
     }
 
     pub fn register<T: 'static, H>(self, handler: H) -> Self
     where
-        H: Fn(EventHandlerBuilder<T>) -> EventHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T>) -> MessageHandlerBlueprint<T>,
     {
         self.register_group(move |g| g.register(handler))
     }
 
     pub fn register_blocking<T: 'static, H>(self, handler: H) -> Self
     where
-        H: Fn(EventHandlerBuilder<T>) -> BlockingEventHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T>) -> BlockingMessageHandlerBlueprint<T>,
     {
         self.register_group(move |g| g.register_blocking(handler))
     }
 
     pub fn finish_group_primary<T: 'static, F>(mut self, group: F) -> Runtime
     where
-        F: FnOnce(EventGroupBuilder) -> EventGroupBuilder,
+        F: FnOnce(MessageGroupBuilder) -> MessageGroupBuilder,
     {
         assert!(self.primary.is_none());
-        let builder = group(EventGroupBuilder::new(&mut self.registry));
+        let builder = group(MessageGroupBuilder::new(&mut self.registry));
         self.primary = Some(builder.finish());
         self.finish()
     }
 
     pub fn finish_primary<T: 'static, H>(mut self, handler: H) -> Runtime
     where
-        H: Fn(EventHandlerBuilder<T>) -> EventHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T>) -> MessageHandlerBlueprint<T>,
     {
         assert!(self.primary.is_none());
-        let builder = EventGroupBuilder::new(&mut self.registry).register(handler);
+        let builder = MessageGroupBuilder::new(&mut self.registry).register(handler);
         self.primary = Some(builder.finish());
         self.finish()
     }
@@ -82,10 +82,10 @@ impl RuntimeBuilder {
     // TODO: order of primary / blocking / register can be made more dynamic with type state pattern
     pub fn finish_primary_blocking<T: 'static, H>(mut self, handler: H) -> Runtime
     where
-        H: Fn(EventHandlerBuilder<T>) -> BlockingEventHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T>) -> BlockingMessageHandlerBlueprint<T>,
     {
         assert!(self.primary.is_none());
-        let builder = EventGroupBuilder::new(&mut self.registry).register_blocking(handler);
+        let builder = MessageGroupBuilder::new(&mut self.registry).register_blocking(handler);
         self.primary = Some(builder.finish());
         self.finish()
     }
@@ -96,7 +96,7 @@ impl RuntimeBuilder {
         }
 
         let registry = Arc::new(self.registry);
-        let scheduler = EventScheduler::new(
+        let scheduler = MessageScheduler::new(
             registry,
             self.groups,
             self.primary,
@@ -111,7 +111,7 @@ impl RuntimeBuilder {
 }
 
 pub struct Runtime {
-    scheduler: EventScheduler,
+    scheduler: MessageScheduler,
 }
 
 impl Runtime {
