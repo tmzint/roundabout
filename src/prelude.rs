@@ -5,7 +5,7 @@ pub use crate::handler::{
 pub use crate::message::bus::{MessageBus, MessageBusReceiver, MessageBusSender, MessageBusView};
 pub use crate::message::vec::MessageVec;
 pub use crate::message::{
-    MessageRegistry, MessageSender, MessageSize, ShutdownMessage, UntypedMessage,
+    MessageRegistry, MessageSender, MessageSize, ShutdownCommand, UntypedMessage,
 };
 pub use crate::schedule::MessagePipeline;
 pub use crate::wait::{Waiter, WaitingStrategy};

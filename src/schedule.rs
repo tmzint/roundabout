@@ -1,6 +1,6 @@
 use crate::handler::{InitializedMessageHandler, MessageHandlerGroup, RuntimeContext};
 use crate::message::bus::{MessageBus, MessageBusReceiver, MessageBusSender};
-use crate::message::{MessageRegistry, MessageSender, ShutdownMessage, ShutdownRequestedMessage};
+use crate::message::{MessageRegistry, MessageSender, ShutdownCommand, ShutdownRequestedEvent};
 use crate::prelude::MessageVec;
 use crate::util::cpu::CpuAffinity;
 use crate::util::triple::{TripleBuffered, TripleBufferedHead, TripleBufferedTail};
@@ -210,7 +210,7 @@ unsafe fn run_router<E: 'static + Send + Sync>(
             SHUTDOWN_NONE => {}
             SHUTDOWN_ORDERLY => match shutdown_timeout_at {
                 None => {
-                    if !buffer.push(ShutdownRequestedMessage::new()) {
+                    if !buffer.push(ShutdownRequestedEvent::new()) {
                         log::info!(
                             "instant shutdown as no message handler for the request was registered"
                         );
@@ -236,7 +236,7 @@ unsafe fn run_router<E: 'static + Send + Sync>(
             },
             SHUTDOWN_FINISH => {
                 log::info!("finishing shutdown");
-                buffer.push(ShutdownMessage::new());
+                buffer.push(ShutdownCommand::new());
                 bus_sender.send_all(&mut buffer);
                 bus_sender.flush_padding();
                 return;
@@ -342,7 +342,7 @@ impl MessagePipelineMulti {
                     handler.handle(&mut self.context, message.message_idx(), message.data());
                 }
 
-                if message.message_idx() == ShutdownMessage::MESSAGE_INDEX {
+                if message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
                     return;
                 }
             }
@@ -375,7 +375,7 @@ impl MessagePipelineSingle {
                 self.handler
                     .handle(&mut self.context, message.message_idx(), message.data());
 
-                if message.message_idx() == ShutdownMessage::MESSAGE_INDEX {
+                if message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
                     return;
                 }
             }
@@ -427,7 +427,7 @@ impl<T> MessagePipeline<T> {
 
                 // Optimization: only check condition when handler actually handles message
                 let state = &*(self.pipeline.handler.state() as *const T);
-                if condition(state) || message.message_idx() == ShutdownMessage::MESSAGE_INDEX {
+                if condition(state) || message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
                     return;
                 }
             }

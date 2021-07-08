@@ -38,9 +38,9 @@ impl PaddingMessage {
 }
 static_assertions::assert_eq_size!(PaddingMessage, ());
 
-pub struct ShutdownMessage(PhantomData<()>);
+pub struct ShutdownCommand(PhantomData<()>);
 
-impl ShutdownMessage {
+impl ShutdownCommand {
     pub(crate) const MESSAGE_INDEX: usize = 1;
 
     pub(crate) fn new() -> Self {
@@ -49,18 +49,18 @@ impl ShutdownMessage {
     }
 }
 
-static_assertions::assert_eq_size!(ShutdownMessage, ());
+static_assertions::assert_eq_size!(ShutdownCommand, ());
 
-pub struct ShutdownRequestedMessage(PhantomData<()>);
+pub struct ShutdownRequestedEvent(PhantomData<()>);
 
-impl ShutdownRequestedMessage {
+impl ShutdownRequestedEvent {
     pub(crate) fn new() -> Self {
         // non public constructable shutdown requested message
         Self(Default::default())
     }
 }
 
-static_assertions::assert_eq_size!(ShutdownRequestedMessage, ());
+static_assertions::assert_eq_size!(ShutdownRequestedEvent, ());
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MessageRegistry {
@@ -131,8 +131,8 @@ impl Default for MessageRegistry {
         let e_idx = registry.register_of::<PaddingMessage>();
         assert_eq!(e_idx, PaddingMessage::MESSAGE_INDEX);
 
-        let e_idx = registry.register_of::<ShutdownMessage>();
-        assert_eq!(e_idx, ShutdownMessage::MESSAGE_INDEX);
+        let e_idx = registry.register_of::<ShutdownCommand>();
+        assert_eq!(e_idx, ShutdownCommand::MESSAGE_INDEX);
 
         registry
     }

@@ -4,7 +4,7 @@ use roundabout::prelude::*;
 use std::time::{Duration, Instant};
 
 #[derive(Copy, Clone)]
-pub struct PingMessage(usize);
+pub struct PingEvent(usize);
 
 pub struct PingState {
     counter: usize,
@@ -19,13 +19,13 @@ pub fn ping_sequential(b: &mut Bencher<WallTime>, n: usize, t: usize) {
         let mut runtime_builder = Runtime::builder(512);
         for i in 0..t {
             runtime_builder = runtime_builder.register::<PingState, _>(|b| {
-                b.on::<PingMessage>(|state, context, ping| {
+                b.on::<PingEvent>(|state, context, ping| {
                     if state.counter == state.n {
                         context.shutdown_switch().request_shutdown();
                     }
 
                     if ping.0 % state.t == state.i {
-                        context.sender().send(PingMessage(ping.0 + 1))
+                        context.sender().send(PingEvent(ping.0 + 1))
                     }
 
                     state.counter += 1;
@@ -42,12 +42,12 @@ pub fn ping_sequential(b: &mut Bencher<WallTime>, n: usize, t: usize) {
         let runtime = runtime_builder.finish();
         // TODO: this also measures startup / shutdown -> requires to get state from runtime // they are not send
         let start = Instant::now();
-        runtime.start(PingMessage(0));
+        runtime.start(PingEvent(0));
         start.elapsed()
     })
 }
 
-pub struct InitMessage(usize);
+pub struct InitEvent(usize);
 
 pub fn ping_concurrent(b: &mut Bencher<WallTime>, n: usize, t: usize, in_flight: usize) {
     assert_eq!(in_flight % t, 0);
@@ -57,18 +57,18 @@ pub fn ping_concurrent(b: &mut Bencher<WallTime>, n: usize, t: usize, in_flight:
         let mut runtime_builder = Runtime::builder(1024);
         for i in 0..t {
             runtime_builder = runtime_builder.register::<PingState, _>(|b| {
-                b.on::<InitMessage>(|state, context, init| {
+                b.on::<InitEvent>(|state, context, init| {
                     for _ in 0..init.0 {
-                        context.sender().send(PingMessage(state.i));
+                        context.sender().send(PingEvent(state.i));
                     }
                 })
-                .on::<PingMessage>(|state, context, ping| {
+                .on::<PingEvent>(|state, context, ping| {
                     if state.counter == state.n {
                         context.shutdown_switch().request_shutdown();
                     }
 
                     if ping.0 % state.t == state.i {
-                        context.sender().send(PingMessage(ping.0 + 1))
+                        context.sender().send(PingEvent(ping.0 + 1))
                     }
 
                     state.counter += 1;
@@ -85,7 +85,7 @@ pub fn ping_concurrent(b: &mut Bencher<WallTime>, n: usize, t: usize, in_flight:
         let runtime = runtime_builder.finish();
         // TODO: this also measures startup / shutdown -> requires to get state from runtime // they are not send
         let start = Instant::now();
-        runtime.start(InitMessage(in_flight / t));
+        runtime.start(InitEvent(in_flight / t));
         start.elapsed()
     })
 }

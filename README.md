@@ -21,10 +21,10 @@ roundabout = "0.1.0"
 use roundabout::prelude::*;
 
 #[derive(Debug)]
-pub struct PingMessage(u64);
+pub struct PingEvent(u64);
 
 #[derive(Debug)]
-pub struct PongMessage(u64);
+pub struct PongEvent(u64);
 
 #[derive(Default)]
 pub struct PingState {
@@ -33,9 +33,9 @@ pub struct PingState {
 
 fn ping_handler(builder: MessageHandlerBuilder<PingState>) -> MessageHandlerBlueprint<PingState> {
     builder
-        .on::<PingMessage>(|state, context, ping| {
+        .on::<PingEvent>(|state, context, ping| {
             println!("Ping: {:?}", ping);
-            context.sender().send(PongMessage(state.count));
+            context.sender().send(PongEvent(state.count));
             state.count += 1;
         })
         .with_default()
@@ -48,10 +48,10 @@ pub struct PongState {
 
 fn pong_handler(builder: MessageHandlerBuilder<PongState>) -> MessageHandlerBlueprint<PongState> {
     builder
-        .on::<PongMessage>(|state, context, pong| {
+        .on::<PongEvent>(|state, context, pong| {
             println!("Pong: {:?}", pong);
             state.count += 1;
-            context.sender().send(PingMessage(state.count));
+            context.sender().send(PingEvent(state.count));
         })
         .with_default()
 }
@@ -61,7 +61,7 @@ fn main() {
         .register(ping_handler)
         .register(pong_handler)
         .finish()
-        .start(PingMessage(0));
+        .start(PingEvent(0));
 }
 
 ```

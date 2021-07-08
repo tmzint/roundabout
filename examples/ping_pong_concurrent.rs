@@ -1,9 +1,9 @@
 use roundabout::prelude::*;
 use std::time::Instant;
 
-pub struct InitMessage;
-pub struct PingMessage(u64);
-pub struct PongMessage(u64);
+pub struct InitEvent;
+pub struct PingEvent(u64);
+pub struct PongEvent(u64);
 
 const INIT_N: usize = 64;
 
@@ -17,13 +17,13 @@ fn ping_handler(
     start: Instant,
 ) -> MessageHandlerBlueprint<PingState> {
     builder
-        .on::<InitMessage>(|_state, context, _init| {
+        .on::<InitEvent>(|_state, context, _init| {
             println!("init ping");
             for _ in 0..INIT_N {
-                context.sender().send(PingMessage(1));
+                context.sender().send(PingEvent(1));
             }
         })
-        .on::<PingMessage>(|state, context, ping| {
+        .on::<PingEvent>(|state, context, ping| {
             state.count += ping.0;
             if state.count % 10000 == 0 {
                 let elapsed = state.start.elapsed();
@@ -34,7 +34,7 @@ fn ping_handler(
                 );
             }
 
-            context.sender().send(PongMessage(1));
+            context.sender().send(PongEvent(1));
         })
         .with(PingState { start, count: 0 })
 }
@@ -49,13 +49,13 @@ fn pong_handler(
     start: Instant,
 ) -> MessageHandlerBlueprint<PongState> {
     builder
-        .on::<InitMessage>(|_state, context, _init| {
+        .on::<InitEvent>(|_state, context, _init| {
             println!("init pong");
             for _ in 0..INIT_N {
-                context.sender().send(PongMessage(1));
+                context.sender().send(PongEvent(1));
             }
         })
-        .on::<PongMessage>(|state, context, pong| {
+        .on::<PongEvent>(|state, context, pong| {
             state.count += pong.0;
             if state.count % 10000 == 0 {
                 let elapsed = state.start.elapsed();
@@ -66,7 +66,7 @@ fn pong_handler(
                 );
             }
 
-            context.sender().send(PingMessage(1));
+            context.sender().send(PingEvent(1));
         })
         .with(PongState { start, count: 0 })
 }
@@ -84,5 +84,5 @@ fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    runtime.start(InitMessage);
+    runtime.start(InitEvent);
 }
