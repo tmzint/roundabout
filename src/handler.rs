@@ -48,7 +48,7 @@ impl<'a, R: 'static> MessageGroupBuilder<'a, R> {
         }
     }
 
-    pub fn register<T: 'static, H>(mut self, handler: H) -> Self
+    pub fn add<T: 'static, H>(mut self, handler: H) -> Self
     where
         H: Fn(MessageHandlerBuilder<T, R>) -> MessageHandlerBlueprint<T, R>,
     {
@@ -72,7 +72,7 @@ impl<'a, R: 'static> MessageGroupBuilder<'a, R> {
 }
 
 impl<'a> MessageGroupBuilder<'a, ()> {
-    pub(crate) fn register_blocking<T: 'static, H>(mut self, blocking_handler: H) -> Self
+    pub(crate) fn add_blocking<T: 'static, H>(mut self, blocking_handler: H) -> Self
     where
         H: Fn(MessageHandlerBuilder<T, ()>) -> BlockingMessageHandlerBlueprint<T, ()>,
     {
@@ -154,7 +154,7 @@ impl<T: 'static, R: 'static> MessageHandlerBuilder<T, R> {
         self
     }
 
-    // TODO: add a "layer" between building (on) and locking in init state (with) to allow instantiation in groups / blocking
+    // TODO: add a "layer" between building (on) and locking in init state (with) to allow instantiation in groups / blocking -> TS?s
 
     pub fn with_factory<F: FnOnce(&RuntimeContext) -> T + 'static + Send>(
         self,

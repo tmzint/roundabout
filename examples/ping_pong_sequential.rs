@@ -38,8 +38,8 @@ fn pong_handler(builder: MessageHandlerBuilder<PongState>) -> MessageHandlerBlue
 
 fn main() {
     Runtime::builder(512)
-        .register(ping_handler)
-        .register(pong_handler)
+        .add(ping_handler)
+        .add(pong_handler)
         .finish()
         .start(PingEvent(0));
 }

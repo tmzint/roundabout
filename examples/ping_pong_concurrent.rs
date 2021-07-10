@@ -74,8 +74,8 @@ fn pong_handler(
 fn main() {
     let start = Instant::now();
     let runtime = Runtime::builder(512)
-        .register(|b| ping_handler(b, start))
-        .register(|b| pong_handler(b, start))
+        .add(|b| ping_handler(b, start))
+        .add(|b| pong_handler(b, start))
         .finish();
 
     let mut shutdown_switch = runtime.get_shutdown_switch();

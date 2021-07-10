@@ -36,7 +36,7 @@ impl RuntimeBuilder {
         self
     }
 
-    pub fn register_group<F>(mut self, group: F) -> Self
+    pub fn add_group<F>(mut self, group: F) -> Self
     where
         F: FnOnce(MessageGroupBuilder) -> MessageGroupBuilder,
     {
@@ -45,18 +45,19 @@ impl RuntimeBuilder {
         self
     }
 
-    pub fn register<T: 'static, H>(self, handler: H) -> Self
+    pub fn add<T: 'static, H>(self, handler: H) -> Self
     where
         H: Fn(MessageHandlerBuilder<T>) -> MessageHandlerBlueprint<T>,
     {
-        self.register_group(move |g| g.register(handler))
+        self.add_group(move |g| g.add(handler))
     }
 
-    pub fn register_blocking<T: 'static, H>(self, handler: H) -> Self
+    // TODO: This instantiates, how to do just registration of factories? and then instantiate them at runtime in the group
+    pub fn add_blocking<T: 'static, H>(self, handler: H) -> Self
     where
         H: Fn(MessageHandlerBuilder<T>) -> BlockingMessageHandlerBlueprint<T>,
     {
-        self.register_group(move |g| g.register_blocking(handler))
+        self.add_group(move |g| g.add_blocking(handler))
     }
 
     pub fn finish_group_primary<T: 'static, F>(mut self, group: F) -> Runtime
@@ -74,18 +75,18 @@ impl RuntimeBuilder {
         H: Fn(MessageHandlerBuilder<T>) -> MessageHandlerBlueprint<T>,
     {
         assert!(self.primary.is_none());
-        let builder = MessageGroupBuilder::new(&mut self.registry).register(handler);
+        let builder = MessageGroupBuilder::new(&mut self.registry).add(handler);
         self.primary = Some(builder.finish());
         self.finish()
     }
 
-    // TODO: order of primary / blocking / register can be made more dynamic with type state pattern
+    // TODO: order of primary / blocking / add can be made more dynamic with type state pattern
     pub fn finish_primary_blocking<T: 'static, H>(mut self, handler: H) -> Runtime
     where
         H: Fn(MessageHandlerBuilder<T>) -> BlockingMessageHandlerBlueprint<T>,
     {
         assert!(self.primary.is_none());
-        let builder = MessageGroupBuilder::new(&mut self.registry).register_blocking(handler);
+        let builder = MessageGroupBuilder::new(&mut self.registry).add_blocking(handler);
         self.primary = Some(builder.finish());
         self.finish()
     }

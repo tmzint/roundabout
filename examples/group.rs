@@ -74,10 +74,10 @@ fn pong_handler(
 fn main() {
     let start = Instant::now();
     let runtime = Runtime::builder(128)
-        .register_group(|group| {
+        .add_group(|group| {
             group
-                .register(|b| ping_handler(b, start))
-                .register(|b| pong_handler(b, start))
+                .add(|b| ping_handler(b, start))
+                .add(|b| pong_handler(b, start))
         })
         .finish();
 

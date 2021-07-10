@@ -36,7 +36,7 @@ fn blocking_handler(
 fn main() {
     let start = Instant::now();
     let runtime = Runtime::builder(128)
-        .register_blocking(|b| blocking_handler(b, start))
+        .add_blocking(|b| blocking_handler(b, start))
         .finish();
 
     let mut shutdown_switch = runtime.get_shutdown_switch();
