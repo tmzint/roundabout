@@ -134,6 +134,6 @@ pub fn message_bus_ping(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default().measurement_time(Duration::from_secs(20));
-    targets = event_bus_ping
+    targets = message_bus_ping
 }
 criterion_main!(benches);

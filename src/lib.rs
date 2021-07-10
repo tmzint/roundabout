@@ -90,11 +90,7 @@ impl RuntimeBuilder {
         self.finish()
     }
 
-    pub fn finish(mut self) -> Runtime {
-        for group in self.groups.iter_mut().chain(self.primary.iter_mut()) {
-            group.fill_jmp_tbl(self.registry.len());
-        }
-
+    pub fn finish(self) -> Runtime {
         let registry = Arc::new(self.registry);
         let scheduler = MessageScheduler::new(
             registry,

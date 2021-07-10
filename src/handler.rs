@@ -33,13 +33,13 @@ impl RuntimeContext {
     }
 }
 
-pub struct MessageGroupBuilder<'a> {
+pub struct MessageGroupBuilder<'a, R = ()> {
     registry: &'a mut MessageRegistry,
-    handlers: Vec<MessageHandler>,
+    handlers: Vec<MessageHandler<R>>,
     blocking: Option<Box<dyn FnOnce(MessagePipelineSingle) + 'static + Send>>,
 }
 
-impl<'a> MessageGroupBuilder<'a> {
+impl<'a, R: 'static> MessageGroupBuilder<'a, R> {
     pub fn new(registry: &'a mut MessageRegistry) -> Self {
         Self {
             registry,
@@ -50,7 +50,7 @@ impl<'a> MessageGroupBuilder<'a> {
 
     pub fn register<T: 'static, H>(mut self, handler: H) -> Self
     where
-        H: Fn(MessageHandlerBuilder<T>) -> MessageHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T, R>) -> MessageHandlerBlueprint<T, R>,
     {
         assert!(self.blocking.is_none());
         let builder = MessageHandlerBuilder::new();
@@ -63,9 +63,18 @@ impl<'a> MessageGroupBuilder<'a> {
         self
     }
 
+    pub(crate) fn finish(self) -> MessageHandlerGroup<R> {
+        MessageHandlerGroup {
+            handlers: self.handlers,
+            blocking: self.blocking,
+        }
+    }
+}
+
+impl<'a> MessageGroupBuilder<'a, ()> {
     pub(crate) fn register_blocking<T: 'static, H>(mut self, blocking_handler: H) -> Self
     where
-        H: Fn(MessageHandlerBuilder<T>) -> BlockingMessageHandlerBlueprint<T>,
+        H: Fn(MessageHandlerBuilder<T, ()>) -> BlockingMessageHandlerBlueprint<T, ()>,
     {
         assert!(self.blocking.is_none());
         assert!(self.handlers.is_empty());
@@ -88,48 +97,38 @@ impl<'a> MessageGroupBuilder<'a> {
 
         self
     }
-
-    pub(crate) fn finish(self) -> MessageHandlerGroup {
-        MessageHandlerGroup {
-            handlers: self.handlers,
-            blocking: self.blocking,
-        }
-    }
 }
 
-pub struct MessageHandlerGroup {
-    handlers: Vec<MessageHandler>,
+pub struct MessageHandlerGroup<R = ()> {
+    handlers: Vec<MessageHandler<R>>,
     blocking: Option<Box<dyn FnOnce(MessagePipelineSingle) + 'static + Send>>,
 }
 
-impl MessageHandlerGroup {
-    pub(crate) fn fill_jmp_tbl(&mut self, length: usize) {
-        for handler in &mut self.handlers {
-            handler.fill_jmp_tbl(length);
-        }
-    }
-
-    pub(crate) fn take_blocking(
-        &mut self,
-    ) -> Option<Box<dyn FnOnce(MessagePipelineSingle) + 'static + Send>> {
-        self.blocking.take()
-    }
-
-    pub(crate) fn initialize(self, context: &RuntimeContext) -> Vec<InitializedMessageHandler> {
-        self.handlers
-            .into_iter()
-            .map(|h| h.initialize(context))
-            .collect()
+impl<R: 'static> MessageHandlerGroup<R> {
+    pub(crate) fn initialize(
+        mut self,
+        context: &RuntimeContext,
+    ) -> (
+        Vec<InitializedMessageHandler<R>>,
+        Option<Box<dyn FnOnce(MessagePipelineSingle) + 'static + Send>>,
+    ) {
+        (
+            self.handlers
+                .into_iter()
+                .map(|h| h.initialize(context))
+                .collect(),
+            self.blocking.take(),
+        )
     }
 }
 
-pub struct MessageHandlerBuilder<T> {
-    jmp_map: HashMap<TypeId, fn(*mut u8, &mut RuntimeContext, *const u8)>,
+pub struct MessageHandlerBuilder<T, R = ()> {
+    jmp_map: HashMap<TypeId, fn(*mut u8, &mut RuntimeContext, *const u8) -> R>,
     max_message_size: MessageSize,
     pd: PhantomData<T>,
 }
 
-impl<T: 'static> MessageHandlerBuilder<T> {
+impl<T: 'static, R: 'static> MessageHandlerBuilder<T, R> {
     pub(crate) fn new() -> Self {
         Self {
             jmp_map: Default::default(),
@@ -140,7 +139,7 @@ impl<T: 'static> MessageHandlerBuilder<T> {
 
     pub fn on<E: 'static + Send + Sync>(
         mut self,
-        f: fn(&mut T, &mut RuntimeContext, e: &E),
+        f: fn(&mut T, &mut RuntimeContext, e: &E) -> R,
     ) -> Self {
         let tid = TypeId::of::<E>();
         self.max_message_size = self.max_message_size.max(MessageSize::of::<E>());
@@ -155,10 +154,12 @@ impl<T: 'static> MessageHandlerBuilder<T> {
         self
     }
 
+    // TODO: add a "layer" between building (on) and locking in init state (with) to allow instantiation in groups / blocking
+
     pub fn with_factory<F: FnOnce(&RuntimeContext) -> T + 'static + Send>(
         self,
         state_init: F,
-    ) -> MessageHandlerBlueprint<T> {
+    ) -> MessageHandlerBlueprint<T, R> {
         MessageHandlerBlueprint {
             builder: self,
             state_init: Box::new(state_init),
@@ -166,8 +167,8 @@ impl<T: 'static> MessageHandlerBuilder<T> {
     }
 }
 
-impl<T: 'static + Send> MessageHandlerBuilder<T> {
-    pub fn with(self, state: T) -> MessageHandlerBlueprint<T> {
+impl<T: 'static + Send, R: 'static> MessageHandlerBuilder<T, R> {
+    pub fn with(self, state: T) -> MessageHandlerBlueprint<T, R> {
         MessageHandlerBlueprint {
             builder: self,
             state_init: Box::new(|_| state),
@@ -175,8 +176,8 @@ impl<T: 'static + Send> MessageHandlerBuilder<T> {
     }
 }
 
-impl<T: 'static + Default> MessageHandlerBuilder<T> {
-    pub fn with_default(self) -> MessageHandlerBlueprint<T> {
+impl<T: 'static + Default, R: 'static> MessageHandlerBuilder<T, R> {
+    pub fn with_default(self) -> MessageHandlerBlueprint<T, R> {
         MessageHandlerBlueprint {
             builder: self,
             state_init: Box::new(|_| T::default()),
@@ -184,15 +185,15 @@ impl<T: 'static + Default> MessageHandlerBuilder<T> {
     }
 }
 
-unsafe impl<T: 'static> Send for MessageHandlerBuilder<T> {}
+unsafe impl<T: 'static, R: 'static> Send for MessageHandlerBuilder<T, R> {}
 
-pub struct MessageHandlerBlueprint<T> {
-    builder: MessageHandlerBuilder<T>,
+pub struct MessageHandlerBlueprint<T, R = ()> {
+    builder: MessageHandlerBuilder<T, R>,
     state_init: Box<dyn FnOnce(&RuntimeContext) -> T + 'static + Send>,
 }
 
-impl<T: 'static> MessageHandlerBlueprint<T> {
-    pub fn block<F>(self, blocking: F) -> BlockingMessageHandlerBlueprint<T>
+impl<T: 'static, R: 'static> MessageHandlerBlueprint<T, R> {
+    pub fn block<F>(self, blocking: F) -> BlockingMessageHandlerBlueprint<T, R>
     where
         F: FnOnce(MessagePipeline<T>) + 'static + Send,
     {
@@ -202,7 +203,7 @@ impl<T: 'static> MessageHandlerBlueprint<T> {
         }
     }
 
-    pub(crate) fn finish(self, registry: &MessageRegistry) -> MessageHandler {
+    pub(crate) fn finish(self, registry: &MessageRegistry) -> MessageHandler<R> {
         unsafe {
             let mut jmp_tbl = Vec::with_capacity(registry.len());
             for _ in 0..registry.len() {
@@ -219,23 +220,23 @@ impl<T: 'static> MessageHandlerBlueprint<T> {
     }
 }
 
-unsafe impl<T: 'static> Send for MessageHandlerBlueprint<T> {}
+unsafe impl<T: 'static, R: 'static> Send for MessageHandlerBlueprint<T, R> {}
 
-pub struct BlockingMessageHandlerBlueprint<T> {
-    pub(crate) blueprint: MessageHandlerBlueprint<T>,
+pub struct BlockingMessageHandlerBlueprint<T, R = ()> {
+    pub(crate) blueprint: MessageHandlerBlueprint<T, R>,
     pub(crate) blocking: Box<dyn FnOnce(MessagePipeline<T>) + 'static + Send>,
 }
 
-pub struct MessageHandler {
+pub struct MessageHandler<R> {
     state_init: Box<dyn for<'a> FnOnce(&'a RuntimeContext) -> *mut u8>,
-    jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8)>>,
+    jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8) -> R>>,
     destructor: fn(*mut u8),
 }
 
-impl MessageHandler {
+impl<R: 'static> MessageHandler<R> {
     unsafe fn new<T: 'static>(
         state_init: Box<dyn for<'a> FnOnce(&'a RuntimeContext) -> T + 'static + Send>,
-        jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8)>>,
+        jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8) -> R>>,
     ) -> Self {
         let destructor = |state_ptr: *mut u8| {
             (state_ptr as *mut T).drop_in_place();
@@ -261,13 +262,7 @@ impl MessageHandler {
         }
     }
 
-    pub(crate) fn fill_jmp_tbl(&mut self, length: usize) {
-        for _ in self.jmp_tbl.len()..length {
-            self.jmp_tbl.push(None);
-        }
-    }
-
-    pub(crate) fn initialize(self, context: &RuntimeContext) -> InitializedMessageHandler {
+    pub(crate) fn initialize(self, context: &RuntimeContext) -> InitializedMessageHandler<R> {
         InitializedMessageHandler {
             state: (self.state_init)(context),
             jmp_tbl: self.jmp_tbl,
@@ -276,9 +271,9 @@ impl MessageHandler {
     }
 }
 
-unsafe impl Send for MessageHandler {}
+unsafe impl<R: 'static> Send for MessageHandler<R> {}
 
-pub struct InitializedMessageHandler {
+pub struct InitializedMessageHandler<R = ()> {
     state: *mut u8,
     // Optimization: jmp_tbl size
     //  don't fully represent all types but use (max_message_idx - min_message_idx + 1) length of a jump table.
@@ -292,11 +287,11 @@ pub struct InitializedMessageHandler {
     //  leading zeroes to compute position in jump table directly
     //
     // Optimization: use arrayvec instead
-    jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8)>>,
+    jmp_tbl: Vec<Option<fn(*mut u8, &mut RuntimeContext, *const u8) -> R>>,
     destructor: fn(*mut u8),
 }
 
-impl InitializedMessageHandler {
+impl<R: 'static> InitializedMessageHandler<R> {
     /**
     Safety:
         * the payload needs to correspond to the message type associated with the message index
@@ -306,11 +301,13 @@ impl InitializedMessageHandler {
         context: &mut RuntimeContext,
         message_index: usize,
         message_payload: *const u8,
-    ) {
+    ) -> Option<R> {
         // Optimization: if vs noop fn
         // Optimization: use unchecked get with full jump table
         if let Some(Some(f)) = self.jmp_tbl.get(message_index) {
-            f(self.state, context, message_payload);
+            Some(f(self.state, context, message_payload))
+        } else {
+            None
         }
     }
 
@@ -319,7 +316,7 @@ impl InitializedMessageHandler {
     }
 }
 
-impl Drop for InitializedMessageHandler {
+impl<R> Drop for InitializedMessageHandler<R> {
     fn drop(&mut self) {
         (self.destructor)(self.state);
     }

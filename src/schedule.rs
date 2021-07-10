@@ -259,7 +259,7 @@ unsafe fn run_router<E: 'static + Send + Sync>(
 }
 
 fn run_pipeline(
-    mut group: MessageHandlerGroup,
+    group: MessageHandlerGroup,
     head: TripleBufferedHead<MessageVec>,
     receiver: MessageBusReceiver,
     cpu: CpuAffinity,
@@ -273,8 +273,7 @@ fn run_pipeline(
     let shutdown_switch = ShutdownSwitch { shutdown };
     let context = RuntimeContext::new(message_sender, shutdown_switch);
 
-    let blocking = group.take_blocking();
-    let mut handlers = group.initialize(&context);
+    let (mut handlers, blocking) = group.initialize(&context);
 
     match (handlers.len(), blocking) {
         (1, None) => MessagePipelineSingle {

@@ -25,7 +25,7 @@ pub fn ping_sequential(b: &mut Bencher<WallTime>, n: usize, t: usize) {
                     }
 
                     if ping.0 % state.t == state.i {
-                        context.sender().send(PingEvent(ping.0 + 1))
+                        context.sender().send(PingEvent(ping.0 + 1));
                     }
 
                     state.counter += 1;
@@ -68,7 +68,7 @@ pub fn ping_concurrent(b: &mut Bencher<WallTime>, n: usize, t: usize, in_flight:
                     }
 
                     if ping.0 % state.t == state.i {
-                        context.sender().send(PingEvent(ping.0 + 1))
+                        context.sender().send(PingEvent(ping.0 + 1));
                     }
 
                     state.counter += 1;
