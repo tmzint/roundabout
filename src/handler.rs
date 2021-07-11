@@ -198,10 +198,10 @@ impl<TS1, T: Send + 'static, A: 'static, B: 'static> MessageHandlerBuilder<TS1, 
     }
 }
 
-impl<T: 'static, A: AsRef<RuntimeContext> + 'static, B: 'static>
-    MessageHandlerBuilder<Closed, Init, T, A, B>
+impl<TS2, T: 'static, A: AsRef<RuntimeContext> + 'static, B: 'static>
+    MessageHandlerBuilder<Closed, TS2, T, A, B>
 {
-    pub fn finish(self, context: &A) -> anyhow::Result<MessageHandler<T, A, B>> {
+    fn intern_init_finish(self, context: &A, state: T) -> anyhow::Result<MessageHandler<T, A, B>> {
         let registry = context.as_ref().registry();
         let mut jmp_tbl = Vec::with_capacity(registry.len());
         for _ in 0..registry.len() {
@@ -216,13 +216,28 @@ impl<T: 'static, A: AsRef<RuntimeContext> + 'static, B: 'static>
             jmp_tbl[idx] = Some(*f);
         }
 
-        let state = (self.state_init.expect("state_init when init"))(context);
-
         Ok(MessageHandler {
             state,
             jmp_tbl,
             _pd: Default::default(),
         })
+    }
+}
+
+impl<T: 'static, A: AsRef<RuntimeContext> + 'static, B: 'static>
+    MessageHandlerBuilder<Closed, Empty, T, A, B>
+{
+    pub fn init_finish(self, context: &A, state: T) -> anyhow::Result<MessageHandler<T, A, B>> {
+        self.intern_init_finish(context, state)
+    }
+}
+
+impl<T: 'static, A: AsRef<RuntimeContext> + 'static, B: 'static>
+    MessageHandlerBuilder<Closed, Init, T, A, B>
+{
+    pub fn finish(mut self, context: &A) -> anyhow::Result<MessageHandler<T, A, B>> {
+        let state = (self.state_init.take().expect("state_init when init"))(context);
+        self.intern_init_finish(context, state)
     }
 }
 
@@ -235,7 +250,7 @@ pub struct MessageHandler<T, A = RuntimeContext, B = ()> {
 
 impl<T: 'static, A: 'static, B: 'static> MessageHandler<T, A, B> {
     #[inline]
-    pub fn handle<'a>(&mut self, context: &mut A, message: &MessageBusView<'a>) -> Option<B> {
+    pub fn handle<'a, M: MessageView>(&mut self, context: &mut A, message: &M) -> Option<B> {
         // Optimization: if (option) vs noop fn
 
         // This requires that the message uses the same message registry,
@@ -245,5 +260,50 @@ impl<T: 'static, A: 'static, B: 'static> MessageHandler<T, A, B> {
                 .get_unchecked(message.message_idx())
                 .map(|f| f(&mut self.state, context, message.data()))
         }
+    }
+}
+
+pub trait MessageView {
+    fn message_idx(&self) -> usize;
+    unsafe fn data(&self) -> *const u8;
+}
+
+impl<'a> MessageView for MessageBusView<'a> {
+    #[inline]
+    fn message_idx(&self) -> usize {
+        MessageBusView::message_idx(self)
+    }
+
+    #[inline]
+    unsafe fn data(&self) -> *const u8 {
+        MessageBusView::data(self)
+    }
+}
+
+pub struct InlineMessageView<T> {
+    data: T,
+    message_idx: usize,
+}
+
+impl<T: Send + Sync + 'static> InlineMessageView<T> {
+    #[inline]
+    pub fn new<A: AsRef<RuntimeContext>>(data: T, context: A) -> Option<Self> {
+        context
+            .as_ref()
+            .registry()
+            .get_index_of::<T>()
+            .map(|message_idx| Self { data, message_idx })
+    }
+}
+
+impl<T: Send + Sync + 'static> MessageView for InlineMessageView<T> {
+    #[inline]
+    fn message_idx(&self) -> usize {
+        self.message_idx
+    }
+
+    #[inline]
+    unsafe fn data(&self) -> *const u8 {
+        &self.data as *const T as *const u8
     }
 }
