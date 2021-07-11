@@ -18,25 +18,27 @@ pub fn ping_sequential(b: &mut Bencher<WallTime>, n: usize, t: usize) {
         let n = iters as usize * n;
         let mut runtime_builder = Runtime::builder(512);
         for i in 0..t {
-            runtime_builder = runtime_builder.add::<PingState, _>(|b| {
-                b.on::<PingEvent>(|state, context, ping| {
-                    if state.counter == state.n {
-                        context.shutdown_switch().request_shutdown();
-                    }
+            runtime_builder = runtime_builder.add(
+                |b: OpenMessageHandlerBuilder<PingState>| {
+                    b.on::<PingEvent>(|state, context, ping| {
+                        if state.counter == state.n {
+                            context.shutdown_switch().request_shutdown();
+                        }
 
-                    if ping.0 % state.t == state.i {
-                        context.sender().send(PingEvent(ping.0 + 1));
-                    }
+                        if ping.0 % state.t == state.i {
+                            context.sender().send(PingEvent(ping.0 + 1));
+                        }
 
-                    state.counter += 1;
-                })
-                .with(PingState {
+                        state.counter += 1;
+                    })
+                },
+                move || PingState {
                     counter: 0,
                     i,
                     n,
                     t,
-                })
-            });
+                },
+            );
         }
 
         let runtime = runtime_builder.finish();
@@ -56,30 +58,32 @@ pub fn ping_concurrent(b: &mut Bencher<WallTime>, n: usize, t: usize, in_flight:
         let n = iters as usize * n;
         let mut runtime_builder = Runtime::builder(1024);
         for i in 0..t {
-            runtime_builder = runtime_builder.add::<PingState, _>(|b| {
-                b.on::<InitEvent>(|state, context, init| {
-                    for _ in 0..init.0 {
-                        context.sender().send(PingEvent(state.i));
-                    }
-                })
-                .on::<PingEvent>(|state, context, ping| {
-                    if state.counter == state.n {
-                        context.shutdown_switch().request_shutdown();
-                    }
+            runtime_builder = runtime_builder.add(
+                |b: OpenMessageHandlerBuilder<PingState>| {
+                    b.on::<InitEvent>(|state, context, init| {
+                        for _ in 0..init.0 {
+                            context.sender().send(PingEvent(state.i));
+                        }
+                    })
+                    .on::<PingEvent>(|state, context, ping| {
+                        if state.counter == state.n {
+                            context.shutdown_switch().request_shutdown();
+                        }
 
-                    if ping.0 % state.t == state.i {
-                        context.sender().send(PingEvent(ping.0 + 1));
-                    }
+                        if ping.0 % state.t == state.i {
+                            context.sender().send(PingEvent(ping.0 + 1));
+                        }
 
-                    state.counter += 1;
-                })
-                .with(PingState {
+                        state.counter += 1;
+                    })
+                },
+                move || PingState {
                     counter: 0,
                     i,
                     n,
                     t,
-                })
-            });
+                },
+            );
         }
 
         let runtime = runtime_builder.finish();

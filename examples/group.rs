@@ -13,9 +13,8 @@ pub struct PingState {
 }
 
 fn ping_handler(
-    builder: MessageHandlerBuilder<PingState>,
-    start: Instant,
-) -> MessageHandlerBlueprint<PingState> {
+    builder: OpenMessageHandlerBuilder<PingState>,
+) -> OpenMessageHandlerBuilder<PingState> {
     builder
         .on::<InitEvent>(|_state, context, _init| {
             println!("init ping");
@@ -36,7 +35,6 @@ fn ping_handler(
 
             context.sender().send(PongEvent(1));
         })
-        .with(PingState { start, count: 0 })
 }
 
 pub struct PongState {
@@ -45,9 +43,8 @@ pub struct PongState {
 }
 
 fn pong_handler(
-    builder: MessageHandlerBuilder<PongState>,
-    start: Instant,
-) -> MessageHandlerBlueprint<PongState> {
+    builder: OpenMessageHandlerBuilder<PongState>,
+) -> OpenMessageHandlerBuilder<PongState> {
     builder
         .on::<InitEvent>(|_state, context, _init| {
             println!("init pong");
@@ -68,16 +65,29 @@ fn pong_handler(
 
             context.sender().send(PingEvent(1));
         })
-        .with(PongState { start, count: 0 })
 }
 
 fn main() {
     let start = Instant::now();
     let runtime = Runtime::builder(128)
-        .add_group(|group| {
-            group
-                .add(|b| ping_handler(b, start))
-                .add(|b| pong_handler(b, start))
+        .add_group(|mut group| {
+            let ping_builder = group.register(ping_handler);
+            let pong_builder = group.register(pong_handler);
+
+            group.init(move |recv, mut context| {
+                let mut ping = ping_builder
+                    .init(&context, PingState { start, count: 0 })
+                    .unwrap();
+
+                let mut pong = pong_builder
+                    .init(&context, PongState { start, count: 0 })
+                    .unwrap();
+
+                recv.stream(move |message| {
+                    ping.handle(&mut context, message);
+                    pong.handle(&mut context, message);
+                });
+            })
         })
         .finish();
 

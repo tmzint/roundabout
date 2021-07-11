@@ -1,11 +1,10 @@
-use crate::handler::{InitializedMessageHandler, MessageHandlerGroup, RuntimeContext};
+use crate::handler::{MessageGroup, RuntimeContext};
 use crate::message::bus::{MessageBus, MessageBusReceiver, MessageBusSender};
 use crate::message::{MessageRegistry, MessageSender, ShutdownCommand, ShutdownRequestedEvent};
-use crate::prelude::MessageVec;
+use crate::prelude::{MessageBusView, MessageVec};
 use crate::util::cpu::CpuAffinity;
 use crate::util::triple::{TripleBuffered, TripleBufferedHead, TripleBufferedTail};
 use crate::wait::WaitingStrategy;
-use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -57,8 +56,8 @@ impl ShutdownSwitch {
 
 pub struct MessageScheduler {
     registry: Arc<MessageRegistry>,
-    groups: Vec<MessageHandlerGroup>,
-    primary: Option<MessageHandlerGroup>,
+    // last group runs on the main thread
+    groups: Vec<MessageGroup>,
     cpu_affinity: bool,
     min_bus_capacity: usize,
     shutdown_timeout: Duration,
@@ -69,8 +68,7 @@ pub struct MessageScheduler {
 impl MessageScheduler {
     pub fn new<ER: Into<Arc<MessageRegistry>>>(
         registry: ER,
-        groups: Vec<MessageHandlerGroup>,
-        primary: Option<MessageHandlerGroup>,
+        groups: Vec<MessageGroup>,
         cpu_affinity: bool,
         min_bus_capacity: usize,
         shutdown_timeout: Duration,
@@ -79,7 +77,6 @@ impl MessageScheduler {
         Self {
             registry: registry.into(),
             groups,
-            primary,
             cpu_affinity,
             min_bus_capacity,
             shutdown_timeout,
@@ -94,16 +91,15 @@ impl MessageScheduler {
         }
     }
 
-    pub fn schedule<E: 'static + Send + Sync>(self, init: E) {
+    pub fn schedule<E: 'static + Send + Sync>(mut self, init: E) {
         unsafe {
-            let pipeline_count = self.groups.len() + self.primary.iter().len();
-            let mut tails = Vec::with_capacity(pipeline_count);
-            let mut handles = Vec::with_capacity(pipeline_count);
+            let mut tails = Vec::with_capacity(self.groups.len());
+            let mut handles = Vec::with_capacity(self.groups.len());
 
-            let (bus_sender, mut bus_receivers) = MessageBus::bounded(
+            let (bus_sender, mut bus_recvs) = MessageBus::bounded(
                 self.registry.deref().to_owned(),
                 self.min_bus_capacity,
-                pipeline_count,
+                self.groups.len(),
                 self.waiting_strategy,
             );
 
@@ -117,10 +113,11 @@ impl MessageScheduler {
                 Vec::default()
             };
 
-            let primary_cpu_affinity = cpu_affinities.pop().unwrap_or_default();
+            let main_cpu_affinity = cpu_affinities.pop().unwrap_or_default();
+            let main_group = self.groups.pop();
 
             for group in self.groups {
-                let receiver = bus_receivers.pop().unwrap();
+                let bus_recv = bus_recvs.pop().unwrap();
 
                 let (head, tail) = TripleBuffered::new([
                     MessageVec::new(self.registry.deref().to_owned()),
@@ -131,13 +128,15 @@ impl MessageScheduler {
 
                 let cpu = cpu_affinities.pop().unwrap_or_default();
                 let shutdown = self.shutdown.clone();
-                let handle =
-                    thread::spawn(move || run_pipeline(group, head, receiver, cpu, shutdown));
+                let registry = self.registry.deref().to_owned();
+                let handle = thread::spawn(move || {
+                    run_pipeline(group, registry, head, bus_recv, cpu, shutdown)
+                });
                 handles.push(handle);
             }
 
-            if let Some(primary) = self.primary {
-                let receiver = bus_receivers.pop().unwrap();
+            if let Some(main_group) = main_group {
+                let bus_recv = bus_recvs.pop().unwrap();
 
                 let (head, tail) = TripleBuffered::new([
                     MessageVec::new(self.registry.deref().to_owned()),
@@ -163,16 +162,14 @@ impl MessageScheduler {
                 });
                 handles.push(router_handle);
 
-                run_pipeline(primary, head, receiver, primary_cpu_affinity, self.shutdown);
-            } else {
-                run_router(
-                    init,
-                    tails,
-                    bus_sender,
-                    primary_cpu_affinity,
-                    self.shutdown_timeout,
-                    &self.shutdown,
-                    self.waiting_strategy,
+                let registry = self.registry.deref().to_owned();
+                run_pipeline(
+                    main_group,
+                    registry,
+                    head,
+                    bus_recv,
+                    main_cpu_affinity,
+                    self.shutdown,
                 );
             }
 
@@ -259,203 +256,90 @@ unsafe fn run_router<E: 'static + Send + Sync>(
 }
 
 fn run_pipeline(
-    group: MessageHandlerGroup,
+    group: MessageGroup,
+    registry: MessageRegistry,
     head: TripleBufferedHead<MessageVec>,
-    receiver: MessageBusReceiver,
+    bus_recv: MessageBusReceiver,
     cpu: CpuAffinity,
     shutdown: Arc<AtomicUsize>,
 ) {
     let panic_shutdown = shutdown.clone();
-    let panic_bomb = PipelinePanicBomb(&panic_shutdown);
+    let panic_bomb = ShutdownPanicBomb(&panic_shutdown);
     cpu.apply_for_current();
 
     let message_sender = MessageSender::new(head);
     let shutdown_switch = ShutdownSwitch { shutdown };
-    let context = RuntimeContext::new(message_sender, shutdown_switch);
+    let context = RuntimeContext::new(registry, message_sender, shutdown_switch);
+    let recv = MessageReceiver::new(bus_recv);
 
-    let (mut handlers, blocking) = group.initialize(&context);
-
-    match (handlers.len(), blocking) {
-        (1, None) => MessagePipelineSingle {
-            receiver,
-            context,
-            handler: handlers.pop().unwrap(),
-        }
-        .trim_horizon_blocking(),
-
-        (1, Some(blocking)) => {
-            let pipeline = MessagePipelineSingle {
-                receiver,
-                context,
-                handler: handlers.pop().unwrap(),
-            };
-            (blocking)(pipeline);
-        }
-
-        (_, None) => MessagePipelineMulti {
-            receiver,
-            context,
-            handlers,
-        }
-        .trim_horizon_blocking(),
-
-        (i, Some(_)) => {
-            panic!(
-                "blocking handlers are only supported for a group with a length of one, \
-                            group has a length of: {}",
-                i
-            );
-        }
-    }
+    group.start(recv, context);
 
     log::info!("pipeline shutdown");
     panic_bomb.disarm();
 }
 
-pub struct PipelinePanicBomb<'a>(&'a AtomicUsize);
+struct ShutdownPanicBomb<'a>(&'a AtomicUsize);
 
-impl<'a> PipelinePanicBomb<'a> {
+impl<'a> ShutdownPanicBomb<'a> {
     pub fn disarm(self) {
         std::mem::forget(self);
     }
 }
 
-impl<'a> Drop for PipelinePanicBomb<'a> {
+impl<'a> Drop for ShutdownPanicBomb<'a> {
     fn drop(&mut self) {
         self.0.store(SHUTDOWN_ABORT, Ordering::Release);
     }
 }
 
-pub struct MessagePipelineMulti {
-    receiver: MessageBusReceiver,
-    context: RuntimeContext,
-    handlers: Vec<InitializedMessageHandler>,
+pub struct MessageReceiver {
+    bus_recv: MessageBusReceiver,
+    shutdown: bool,
 }
 
-impl MessagePipelineMulti {
-    pub fn trim_horizon_blocking(mut self) {
-        unsafe {
-            loop {
-                let message = self.receiver.recv();
-                for handler in &mut self.handlers {
-                    handler.handle(&mut self.context, message.message_idx(), message.data());
-                }
-
-                if message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
-                    return;
-                }
-            }
-        }
-    }
-}
-
-pub struct MessagePipelineSingle {
-    receiver: MessageBusReceiver,
-    context: RuntimeContext,
-    handler: InitializedMessageHandler,
-}
-
-impl MessagePipelineSingle {
-    #[inline]
-    pub fn trim_horizon(&mut self) {
-        unsafe {
-            while let Some(message) = self.receiver.try_recv() {
-                self.handler
-                    .handle(&mut self.context, message.message_idx(), message.data());
-            }
-        }
-    }
-
-    #[inline]
-    pub fn trim_horizon_blocking(mut self) {
-        unsafe {
-            loop {
-                let message = self.receiver.recv();
-                self.handler
-                    .handle(&mut self.context, message.message_idx(), message.data());
-
-                if message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
-                    return;
-                }
-            }
-        }
-    }
-}
-
-pub struct MessagePipeline<T> {
-    pipeline: MessagePipelineSingle,
-    _pd: PhantomData<T>,
-}
-
-impl<T> MessagePipeline<T> {
-    /**
-    Safety:
-        * the type has to match the type of the state of the enclosed InitializedMessageHandler
-    */
-    pub(crate) unsafe fn new(pipeline: MessagePipelineSingle) -> Self {
+impl MessageReceiver {
+    fn new(bus_recv: MessageBusReceiver) -> Self {
         Self {
-            pipeline,
-            _pd: Default::default(),
+            bus_recv,
+            shutdown: false,
         }
     }
 
     #[inline]
-    pub fn trim_horizon(&mut self) {
-        self.pipeline.trim_horizon();
-    }
+    pub fn stream<F: FnMut(&MessageBusView)>(mut self, mut f: F) {
+        loop {
+            let message = self.bus_recv.recv();
+            f(&message);
 
-    #[inline]
-    pub fn trim_horizon_while<F: Fn(&T) -> bool>(&mut self, condition: F) {
-        self.trim_horizon_until(|t| !condition(t));
-    }
-
-    #[inline]
-    pub fn trim_horizon_until<F: Fn(&T) -> bool>(&mut self, condition: F) {
-        unsafe {
-            if condition(&*(self.pipeline.handler.state() as *const T)) {
+            if message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
                 return;
             }
-
-            loop {
-                let message = self.pipeline.receiver.recv();
-                self.pipeline.handler.handle(
-                    &mut self.pipeline.context,
-                    message.message_idx(),
-                    message.data(),
-                );
-
-                // Optimization: only check condition when handler actually handles message
-                let state = &*(self.pipeline.handler.state() as *const T);
-                if condition(state) || message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
-                    return;
-                }
-            }
         }
     }
 
     #[inline]
-    pub fn trim_horizon_blocking(self) {
-        self.pipeline.trim_horizon_blocking();
+    pub fn recv(&mut self) -> anyhow::Result<MessageBusView> {
+        if self.shutdown {
+            return Err(anyhow::anyhow!("message bus shutdown"));
+        }
+
+        let message = self.bus_recv.recv();
+        self.shutdown = message.message_idx() == ShutdownCommand::MESSAGE_INDEX;
+
+        Ok(message)
     }
 
     #[inline]
-    pub fn state(&self) -> &T {
-        unsafe { &*(self.pipeline.handler.state() as *const T) }
-    }
+    pub fn try_recv(&mut self) -> anyhow::Result<Option<MessageBusView>> {
+        if self.shutdown {
+            return Err(anyhow::anyhow!("message bus shutdown"));
+        }
 
-    #[inline]
-    pub fn state_mut(&mut self) -> &mut T {
-        unsafe { &mut *(self.pipeline.handler.state() as *mut T) }
-    }
-
-    #[inline]
-    pub fn context(&mut self) -> &mut RuntimeContext {
-        &mut self.pipeline.context
-    }
-
-    #[inline]
-    pub fn explode(&mut self) -> (&mut T, &mut RuntimeContext) {
-        let state = unsafe { &mut *(self.pipeline.handler.state() as *mut T) };
-        (state, &mut self.pipeline.context)
+        if let Some(message) = self.bus_recv.try_recv() {
+            self.shutdown = message.message_idx() == ShutdownCommand::MESSAGE_INDEX;
+            Ok(Some(message))
+        } else {
+            Ok(None)
+        }
     }
 }
