@@ -13,7 +13,7 @@ To use roundabout in your project add the following to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-roundabout = "0.1.0"
+roundabout = "0.2.0"
 ```
 
 ## Hello World
