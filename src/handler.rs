@@ -226,7 +226,7 @@ impl<T: 'static, A: AsRef<RuntimeContext> + 'static, B: 'static>
     }
 }
 
-pub struct MessageHandler<T, A, B> {
+pub struct MessageHandler<T, A = RuntimeContext, B = ()> {
     pub state: T,
     jmp_tbl: Vec<Option<fn(&mut T, &mut A, *const u8) -> B>>,
     // make non send

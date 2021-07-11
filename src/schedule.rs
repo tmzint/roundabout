@@ -307,6 +307,10 @@ impl MessageReceiver {
 
     #[inline]
     pub fn stream<F: FnMut(&MessageBusView)>(mut self, mut f: F) {
+        if self.shutdown {
+            return;
+        }
+
         loop {
             let message = self.bus_recv.recv();
             f(&message);
@@ -314,6 +318,24 @@ impl MessageReceiver {
             if message.message_idx() == ShutdownCommand::MESSAGE_INDEX {
                 return;
             }
+        }
+    }
+
+    #[inline]
+    pub fn recv_while<F: FnMut(&MessageBusView) -> bool>(
+        &mut self,
+        mut f: F,
+    ) -> anyhow::Result<()> {
+        loop {
+            if self.shutdown {
+                return Err(anyhow::anyhow!("message bus shutdown"));
+            }
+
+            let message = self.bus_recv.recv();
+            if !f(&message) {
+                return Ok(());
+            }
+            self.shutdown = message.message_idx() == ShutdownCommand::MESSAGE_INDEX;
         }
     }
 
