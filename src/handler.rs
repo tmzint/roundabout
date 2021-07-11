@@ -42,6 +42,13 @@ impl RuntimeContext {
     }
 }
 
+impl AsRef<RuntimeContext> for RuntimeContext {
+    #[inline]
+    fn as_ref(&self) -> &RuntimeContext {
+        self
+    }
+}
+
 pub struct MessageGroupBuilder<'a> {
     registry: &'a mut MessageRegistry,
 }
@@ -51,12 +58,12 @@ impl<'a> MessageGroupBuilder<'a> {
         Self { registry }
     }
 
-    pub fn register<T: 'static, A: 'static, B: 'static, F>(
+    pub fn register<TS2, T: 'static, A: 'static, B: 'static, F>(
         &mut self,
         f: F,
-    ) -> ClosedMessageHandlerBuilder<T, A, B>
+    ) -> MessageHandlerBuilder<Closed, TS2, T, A, B>
     where
-        F: FnOnce(OpenMessageHandlerBuilder<T, A, B>) -> OpenMessageHandlerBuilder<T, A, B>,
+        F: FnOnce(OpenMessageHandlerBuilder<T, A, B>) -> MessageHandlerBuilder<Open, TS2, T, A, B>,
     {
         f(OpenMessageHandlerBuilder::new()).close(&mut self.registry)
     }
@@ -85,26 +92,39 @@ impl MessageGroup {
 pub struct Open;
 pub struct Closed;
 
-pub type OpenMessageHandlerBuilder<T, A = RuntimeContext, B = ()> =
-    MessageHandlerBuilder<Open, T, A, B>;
-pub type ClosedMessageHandlerBuilder<T, A = RuntimeContext, B = ()> =
-    MessageHandlerBuilder<Closed, T, A, B>;
+pub struct Empty;
+pub struct Init;
 
-pub struct MessageHandlerBuilder<TS, T, A, B> {
+pub type OpenMessageHandlerBuilder<T, A = RuntimeContext, B = ()> =
+    MessageHandlerBuilder<Open, Empty, T, A, B>;
+pub type ClosedMessageHandlerBuilder<T, A = RuntimeContext, B = ()> =
+    MessageHandlerBuilder<Closed, Empty, T, A, B>;
+pub type InitMessageHandlerBuilder<T, A = RuntimeContext, B = ()> =
+    MessageHandlerBuilder<Open, Init, T, A, B>;
+pub type FinMessageHandlerBuilder<T, A = RuntimeContext, B = ()> =
+    MessageHandlerBuilder<Closed, Init, T, A, B>;
+
+pub struct MessageHandlerBuilder<TS1, TS2, T, A, B> {
     jmp_map: Arc<HashMap<TypeId, fn(&mut T, &mut A, *const u8) -> B>>,
     max_message_size: MessageSize,
-    _pd: PhantomData<TS>,
+    state_init: Option<Box<dyn FnOnce(&A) -> T + Send + 'static>>,
+    _pd_ts1: PhantomData<TS1>,
+    _pd_ts2: PhantomData<TS2>,
 }
 
-impl<T: 'static, A: 'static, B: 'static> MessageHandlerBuilder<Open, T, A, B> {
+impl<T: 'static, A: 'static, B: 'static> MessageHandlerBuilder<Open, Empty, T, A, B> {
     pub(crate) fn new() -> Self {
         Self {
             jmp_map: Default::default(),
             max_message_size: Default::default(),
-            _pd: Default::default(),
+            state_init: None,
+            _pd_ts1: Default::default(),
+            _pd_ts2: Default::default(),
         }
     }
+}
 
+impl<TS2, T: 'static, A: 'static, B: 'static> MessageHandlerBuilder<Open, TS2, T, A, B> {
     pub fn on<E: 'static + Send + Sync>(mut self, f: fn(&mut T, &mut A, e: &E) -> B) -> Self {
         let tid = TypeId::of::<E>();
         self.max_message_size = self.max_message_size.max(MessageSize::of::<E>());
@@ -125,24 +145,64 @@ impl<T: 'static, A: 'static, B: 'static> MessageHandlerBuilder<Open, T, A, B> {
     pub(crate) fn close(
         self,
         registry: &mut MessageRegistry,
-    ) -> ClosedMessageHandlerBuilder<T, A, B> {
+    ) -> MessageHandlerBuilder<Closed, TS2, T, A, B> {
         registry.register_all(self.jmp_map.keys().copied(), self.max_message_size);
 
-        ClosedMessageHandlerBuilder {
+        MessageHandlerBuilder {
             jmp_map: self.jmp_map,
             max_message_size: self.max_message_size,
-            _pd: Default::default(),
+            state_init: self.state_init,
+            _pd_ts1: Default::default(),
+            _pd_ts2: Default::default(),
         }
     }
 }
 
-impl<T: 'static, A: 'static, B: 'static> MessageHandlerBuilder<Closed, T, A, B> {
-    pub fn init(
-        self,
-        context: &RuntimeContext,
-        state: T,
-    ) -> anyhow::Result<MessageHandler<T, A, B>> {
-        let registry = context.registry();
+impl<T: 'static, A: 'static, B: 'static> Clone for MessageHandlerBuilder<Closed, Empty, T, A, B> {
+    fn clone(&self) -> Self {
+        Self {
+            jmp_map: self.jmp_map.clone(),
+            max_message_size: self.max_message_size,
+            // is none as we are not in TS2 of Init but in Empty
+            state_init: None,
+            _pd_ts1: Default::default(),
+            _pd_ts2: Default::default(),
+        }
+    }
+}
+
+impl<TS1, T: 'static, A: 'static, B: 'static> MessageHandlerBuilder<TS1, Empty, T, A, B> {
+    pub fn init_fn<F>(self, sate_init: F) -> MessageHandlerBuilder<TS1, Init, T, A, B>
+    where
+        F: FnOnce(&A) -> T + Send + 'static,
+    {
+        MessageHandlerBuilder {
+            jmp_map: self.jmp_map,
+            max_message_size: self.max_message_size,
+            state_init: Some(Box::new(sate_init)),
+            _pd_ts1: Default::default(),
+            _pd_ts2: Default::default(),
+        }
+    }
+}
+
+impl<TS1, T: Default + 'static, A: 'static, B: 'static> MessageHandlerBuilder<TS1, Empty, T, A, B> {
+    pub fn init_default(self) -> MessageHandlerBuilder<TS1, Init, T, A, B> {
+        self.init_fn(|_| T::default())
+    }
+}
+
+impl<TS1, T: Send + 'static, A: 'static, B: 'static> MessageHandlerBuilder<TS1, Empty, T, A, B> {
+    pub fn init(self, state: T) -> MessageHandlerBuilder<TS1, Init, T, A, B> {
+        self.init_fn(|_| state)
+    }
+}
+
+impl<T: 'static, A: AsRef<RuntimeContext> + 'static, B: 'static>
+    MessageHandlerBuilder<Closed, Init, T, A, B>
+{
+    pub fn finish(self, context: &A) -> anyhow::Result<MessageHandler<T, A, B>> {
+        let registry = context.as_ref().registry();
         let mut jmp_tbl = Vec::with_capacity(registry.len());
         for _ in 0..registry.len() {
             jmp_tbl.push(None)
@@ -155,6 +215,8 @@ impl<T: 'static, A: 'static, B: 'static> MessageHandlerBuilder<Closed, T, A, B> 
 
             jmp_tbl[idx] = Some(*f);
         }
+
+        let state = (self.state_init.expect("state_init when init"))(context);
 
         Ok(MessageHandler {
             state,
@@ -177,7 +239,7 @@ impl<T: 'static, A: 'static, B: 'static> MessageHandler<T, A, B> {
         // Optimization: if (option) vs noop fn
 
         // This requires that the message uses the same message registry,
-        // which is guaranteed by making Message Handler non send.
+        // which is guaranteed by making Message Handler and Runtime Context non send.
         unsafe {
             self.jmp_tbl
                 .get_unchecked(message.message_idx())

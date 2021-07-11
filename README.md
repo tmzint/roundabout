@@ -31,14 +31,14 @@ pub struct PingState {
     count: u64,
 }
 
-fn ping_handler(builder: MessageHandlerBuilder<PingState>) -> MessageHandlerBlueprint<PingState> {
+fn ping_handler(builder: OpenMessageHandlerBuilder<PingState>) -> InitMessageHandlerBuilder<PingState> {
     builder
         .on::<PingEvent>(|state, context, ping| {
             println!("Ping: {:?}", ping);
             context.sender().send(PongEvent(state.count));
             state.count += 1;
         })
-        .with_default()
+        .init_default()
 }
 
 #[derive(Default)]
@@ -46,14 +46,14 @@ pub struct PongState {
     count: u64,
 }
 
-fn pong_handler(builder: MessageHandlerBuilder<PongState>) -> MessageHandlerBlueprint<PongState> {
+fn pong_handler(builder: OpenMessageHandlerBuilder<PongState>) -> InitMessageHandlerBuilder<PongState> {
     builder
         .on::<PongEvent>(|state, context, pong| {
             println!("Pong: {:?}", pong);
             state.count += 1;
             context.sender().send(PingEvent(state.count));
         })
-        .with_default()
+        .init_default()
 }
 
 fn main() {

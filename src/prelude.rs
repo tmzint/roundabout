@@ -1,6 +1,7 @@
 pub use crate::handler::{
-    ClosedMessageHandlerBuilder, MessageGroup, MessageGroupBuilder, MessageHandler,
-    MessageHandlerBuilder, OpenMessageHandlerBuilder, RuntimeContext,
+    ClosedMessageHandlerBuilder, FinMessageHandlerBuilder, InitMessageHandlerBuilder, MessageGroup,
+    MessageGroupBuilder, MessageHandler, MessageHandlerBuilder, OpenMessageHandlerBuilder,
+    RuntimeContext,
 };
 pub use crate::message::bus::{MessageBus, MessageBusReceiver, MessageBusSender, MessageBusView};
 pub use crate::message::vec::MessageVec;

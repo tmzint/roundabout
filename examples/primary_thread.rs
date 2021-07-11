@@ -10,7 +10,8 @@ pub struct BlockingState {
 
 fn foo_handler(
     b: OpenMessageHandlerBuilder<BlockingState>,
-) -> OpenMessageHandlerBuilder<BlockingState> {
+    start: Instant,
+) -> InitMessageHandlerBuilder<BlockingState> {
     b.on::<PingEvent>(|state, context, foo| {
         state.count += foo.0;
         if state.count % 10000 == 0 {
@@ -24,12 +25,12 @@ fn foo_handler(
 
         context.sender().send(PingEvent(1));
     })
+    .init(BlockingState { start, count: 0 })
 }
 
 fn main() {
     let start = Instant::now();
-    let runtime =
-        Runtime::builder(128).finish_main(foo_handler, move || BlockingState { start, count: 0 });
+    let runtime = Runtime::builder(128).finish_main(|b| foo_handler(b, start));
 
     let mut shutdown_switch = runtime.get_shutdown_switch();
     ctrlc::set_handler(move || {

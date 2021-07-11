@@ -14,7 +14,8 @@ pub struct PingState {
 
 fn ping_handler(
     builder: OpenMessageHandlerBuilder<PingState>,
-) -> OpenMessageHandlerBuilder<PingState> {
+    start: Instant,
+) -> InitMessageHandlerBuilder<PingState> {
     builder
         .on::<InitEvent>(|_state, context, _init| {
             println!("init ping");
@@ -35,6 +36,7 @@ fn ping_handler(
 
             context.sender().send(PongEvent(1));
         })
+        .init(PingState { start, count: 0 })
 }
 
 pub struct PongState {
@@ -44,7 +46,8 @@ pub struct PongState {
 
 fn pong_handler(
     builder: OpenMessageHandlerBuilder<PongState>,
-) -> OpenMessageHandlerBuilder<PongState> {
+    start: Instant,
+) -> InitMessageHandlerBuilder<PongState> {
     builder
         .on::<InitEvent>(|_state, context, _init| {
             println!("init pong");
@@ -65,13 +68,14 @@ fn pong_handler(
 
             context.sender().send(PingEvent(1));
         })
+        .init(PongState { start, count: 0 })
 }
 
 fn main() {
     let start = Instant::now();
     let runtime = Runtime::builder(512)
-        .add(ping_handler, move || PingState { start, count: 0 })
-        .add(pong_handler, move || PongState { start, count: 0 })
+        .add(|b| ping_handler(b, start))
+        .add(|b| pong_handler(b, start))
         .finish();
 
     let mut shutdown_switch = runtime.get_shutdown_switch();

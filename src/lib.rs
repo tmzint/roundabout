@@ -6,7 +6,9 @@ mod schedule;
 mod util;
 mod wait;
 
-use crate::handler::{MessageGroup, MessageGroupBuilder, OpenMessageHandlerBuilder};
+use crate::handler::{
+    InitMessageHandlerBuilder, MessageGroup, MessageGroupBuilder, OpenMessageHandlerBuilder,
+};
 use crate::message::MessageRegistry;
 use crate::schedule::{MessageScheduler, ShutdownSwitch};
 use crate::wait::WaitingStrategy;
@@ -34,18 +36,15 @@ impl RuntimeBuilder {
         self
     }
 
-    // TODO: better ux // custom group builder type that allows init of single handler -> SingleGroupBuilder
-    //  and modularization (allow creation of init orthogonal to closed?)
-    pub fn add<T: 'static, FH, FT>(self, handler: FH, init: FT) -> Self
+    pub fn add<T: 'static, FH>(self, handler: FH) -> Self
     where
-        FH: FnOnce(OpenMessageHandlerBuilder<T>) -> OpenMessageHandlerBuilder<T>,
-        FT: FnOnce() -> T + Send + 'static,
+        FH: FnOnce(OpenMessageHandlerBuilder<T>) -> InitMessageHandlerBuilder<T>,
     {
         self.add_group(|mut group| {
             let hb = group.register(handler);
 
             group.init(move |recv, mut context| {
-                let mut h = hb.init(&context, init()).unwrap();
+                let mut h = hb.finish(&context).unwrap();
                 recv.stream(move |message| {
                     h.handle(&mut context, message);
                 });
@@ -62,12 +61,11 @@ impl RuntimeBuilder {
         self
     }
 
-    pub fn finish_main<T: 'static, FH, FT>(self, handler: FH, init: FT) -> Runtime
+    pub fn finish_main<T: 'static, FH>(self, handler: FH) -> Runtime
     where
-        FH: FnOnce(OpenMessageHandlerBuilder<T>) -> OpenMessageHandlerBuilder<T>,
-        FT: FnOnce() -> T + Send + 'static,
+        FH: FnOnce(OpenMessageHandlerBuilder<T>) -> InitMessageHandlerBuilder<T>,
     {
-        self.add(handler, init).finish()
+        self.add(handler).finish()
     }
 
     pub fn finish_main_group<F>(self, group: F) -> Runtime
@@ -103,7 +101,7 @@ impl Runtime {
             min_bus_capacity,
             shutdown_timeout: Duration::from_secs(10),
             waiting_strategy: Default::default(),
-            registry: Default::default(),
+            registry: MessageRegistry::default(),
             groups: Default::default(),
         }
     }
